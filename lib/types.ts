@@ -1,0 +1,17 @@
+export {
+  SCHEMA_VERSION,
+  type BlockKind,
+  type Category,
+  type DragPayload,
+  type Period,
+  type PeriodBreak,
+  type PeriodColor,
+  type PeriodKind,
+  type RoutineIconName,
+  type RoutineTemplate,
+  type Task,
+  type TaskStatus,
+  type TodoItem,
+  type TodoList,
+  type TodoListColor,
+} from "@/lib/schema";
