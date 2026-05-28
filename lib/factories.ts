@@ -1,6 +1,11 @@
 import {
   SCHEMA_VERSION,
   type Category,
+  type CommuteConfig,
+  type CommuteEstimate,
+  type EventItem,
+  type EventStatus,
+  type EventType,
   type Period,
   type PeriodBreak,
   type PeriodColor,
@@ -67,6 +72,8 @@ export type CreateTaskInput = {
   kind?: Task["kind"];
   locked?: boolean;
   source_id?: string | null;
+  commute_config?: CommuteConfig | null;
+  commute_estimate?: CommuteEstimate | null;
   id?: string;
 };
 
@@ -83,6 +90,8 @@ export function createTask(input: CreateTaskInput): Task {
     start_time: input.start_time ?? null,
     locked: input.locked ?? false,
     source_id: input.source_id ?? null,
+    commute_config: input.commute_config ?? null,
+    commute_estimate: input.commute_estimate ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -105,6 +114,8 @@ export type CreateTemplateInput = {
   color?: TodoListColor;
   icon?: RoutineIconName;
   default_duration_minutes: number;
+  commute_enabled?: boolean;
+  commute_config?: CommuteConfig | null;
   kind?: RoutineTemplate["kind"];
   built_in?: boolean;
   id?: string;
@@ -123,6 +134,8 @@ export function createTemplate(input: CreateTemplateInput): RoutineTemplate {
     icon: input.icon ?? (input.kind === "sleep" ? "moon" : "zap"),
     kind: input.kind ?? "routine",
     default_duration_minutes: input.default_duration_minutes,
+    commute_enabled: input.commute_enabled ?? Boolean(input.commute_config),
+    commute_config: input.commute_config ?? null,
     built_in: input.built_in ?? false,
     created_at: now,
     updated_at: now,
@@ -156,30 +169,75 @@ export type CreateTodoInput = {
 
 export function createTodo(input: CreateTodoInput): TodoItem {
   const now = nowIso();
+  const status = input.status ?? "pending";
   return {
     id: input.id ?? newId("todo"),
     schema_version: SCHEMA_VERSION,
     title: input.title.trim() || "Untitled todo",
     category: input.category,
-    status: input.status ?? "pending",
+    status,
     due_date: input.due_date ?? null,
     due_time: input.due_time ?? null,
     tags: input.tags ?? [],
     list_id: input.list_id,
+    completed_at: status === "completed" ? now : null,
+    context_docs: [],
+    user_insight: null,
+    estimate: null,
+    estimate_snapshot: null,
+    actual_minutes: null,
     created_at: now,
     updated_at: now,
   };
 }
 
 export function patchTodo(todo: TodoItem, patch: Partial<TodoItem>): TodoItem {
-  return {
+  const now = nowIso();
+  const merged: TodoItem = {
     ...todo,
     ...patch,
     id: todo.id,
     schema_version: SCHEMA_VERSION,
     created_at: todo.created_at,
-    updated_at: nowIso(),
+    updated_at: now,
   };
+
+  // Auto-manage status-flip side effects so callers don't have to:
+  // - pending → completed:
+  //     * stamp completed_at (now, unless patch overrides)
+  //     * snapshot the current estimate so accuracy stats can later compare
+  //       the actual against the *prediction that was standing at completion*
+  //       — even if the user re-estimates afterwards.
+  //     * actual_minutes comes from the patch (caller passes the auto-derived
+  //       value from completedMinutesByTodo); leave null if not provided.
+  // - completed → pending: clear the completion-time fields. User is starting
+  //   over, the old snapshot/actual no longer represent this attempt.
+  // - No transition: leave the snapshot/actual alone unless the patch
+  //   explicitly sets them.
+  if (patch.status && patch.status !== todo.status) {
+    if (patch.status === "completed") {
+      merged.completed_at = patch.completed_at ?? now;
+      if (patch.estimate_snapshot === undefined) {
+        merged.estimate_snapshot = todo.estimate
+          ? {
+              minutes: todo.estimate.minutes,
+              source: todo.estimate.source,
+              snapshotted_at: now,
+            }
+          : null;
+      }
+      // actual_minutes: prefer patch value; otherwise leave null.
+      if (patch.actual_minutes === undefined) {
+        merged.actual_minutes = null;
+      }
+    } else {
+      merged.completed_at = null;
+      merged.estimate_snapshot = null;
+      merged.actual_minutes = null;
+    }
+  }
+
+  return merged;
 }
 
 export type CreateTodoListInput = {
@@ -273,6 +331,61 @@ export function patchPeriod(period: Period, patch: Partial<Period>): Period {
     id: period.id,
     schema_version: SCHEMA_VERSION,
     created_at: period.created_at,
+    updated_at: nowIso(),
+  };
+}
+
+// ── Event factories ────────────────────────────────────────────────────
+
+export type CreateEventInput = {
+  title: string;
+  category?: Category;
+  list_id: string;
+  /** ISO datetime — required, an event without a time is meaningless. */
+  starts_at: string;
+  duration_minutes: number;
+  duration_uncertain?: boolean;
+  event_type?: EventType;
+  tags?: string[];
+  notes?: string | null;
+  status?: EventStatus;
+  id?: string;
+};
+
+export function createEvent(input: CreateEventInput): EventItem {
+  const now = nowIso();
+  return {
+    id: input.id ?? newId("event"),
+    schema_version: SCHEMA_VERSION,
+    title: input.title.trim() || "Untitled event",
+    category: input.category ?? "T1",
+    list_id: input.list_id,
+    tags: input.tags ?? [],
+    starts_at: input.starts_at,
+    duration_minutes: Math.max(5, Math.round(input.duration_minutes)),
+    duration_uncertain: input.duration_uncertain ?? false,
+    event_type: input.event_type ?? "general",
+    notes:
+      typeof input.notes === "string" && input.notes.trim()
+        ? input.notes.trim().slice(0, 2000)
+        : null,
+    context_docs: [],
+    status: input.status ?? "scheduled",
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+export function patchEvent(
+  event: EventItem,
+  patch: Partial<EventItem>,
+): EventItem {
+  return {
+    ...event,
+    ...patch,
+    id: event.id,
+    schema_version: SCHEMA_VERSION,
+    created_at: event.created_at,
     updated_at: nowIso(),
   };
 }

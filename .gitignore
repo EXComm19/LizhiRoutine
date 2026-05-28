@@ -39,3 +39,8 @@ Thumbs.db
 !.vscode/extensions.json
 !.vscode/settings.json
 .claude/
+.mapbox-usage.json
+.gmail-store.json
+
+# debug dumps (HAE payloads etc)
+/tmp/

@@ -1,6 +1,6 @@
 export const DAY_START_HOUR = 5;
 export const DAY_END_HOUR = 29;
-const PIXELS_PER_HOUR = 72;
+const PIXELS_PER_HOUR = 88;
 
 export const MINUTES_PER_PIXEL = 60 / PIXELS_PER_HOUR;
 export const SNAP_MINUTES = 30;
@@ -40,6 +40,27 @@ export function addDays(dateKey: string, days: number) {
 
 export function todayKey() {
   return formatDateKey(new Date());
+}
+
+/**
+ * The date key whose timeline window contains "right now".
+ *
+ * The planner's day runs from DAY_START_HOUR (default 5am) to the same hour
+ * the next morning — so the hours between midnight and 5am visually belong
+ * to the *previous* calendar day's timeline. This helper returns that
+ * "owner" date for the current moment.
+ *
+ * Use this instead of `todayKey()` for anything that should align with the
+ * user's perception of "today" in the UI (e.g., the Today button, the
+ * initial selectedDate on mount). Continue using `todayKey()` for things
+ * that genuinely care about the calendar day (deadlines, ICS imports).
+ */
+export function activeTimelineDayKey() {
+  const now = new Date();
+  if (now.getHours() < DAY_START_HOUR) {
+    now.setDate(now.getDate() - 1);
+  }
+  return formatDateKey(now);
 }
 
 export function timelineStart(dateKey: string) {

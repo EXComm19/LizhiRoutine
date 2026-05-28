@@ -3,80 +3,184 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --bg: #f6f6f7;
-  --surface: #ffffff;
-  --surface-muted: #fafafa;
-  --rail: #f1f1f3;
-  --border: #e7e7ea;
-  --border-strong: #d8d8dd;
-  --text: #18181b;
-  --text-muted: #71717a;
-  --text-subtle: #a1a1aa;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
-  --ring: rgba(79, 70, 229, 0.35);
+  /* Surface */
+  --canvas:       #EFEAE0;
+  --bg:           #FAF7F1;
+  --card:         #FFFFFF;
+  --sunken:       #F2EEE5;
+  --hover:        #F6F2EA;
+
+  /* Lines */
+  --line:         #E4DFD3;
+  --line-soft:    #EDE8DC;
+  --line-strong:  #CFC9BB;
+
+  /* Ink (text) */
+  --ink:          #1A170E;
+  --ink-2:        #5C5849;
+  --ink-3:        #98937F;
+  --ink-4:        #C9C3B0;
+
+  /* Tier accents */
+  --t0:           #1A170E;
+  --t0-soft:      rgba(26, 23, 14, 0.08);
+  --t1:           oklch(48% 0.18 305);
+  --t1-soft:      oklch(94% 0.04 305);
+  --t1-line:      oklch(80% 0.08 305);
+  --t1-on:        #ffffff;
+  --t2:           oklch(60% 0.14 60);
+  --t2-soft:      oklch(95% 0.05 70);
+  --t2-line:      oklch(82% 0.09 70);
+  --t2-on:        #ffffff;
+
+  /* Block fills */
+  --block-sleep:      oklch(28% 0.10 295);
+  --block-sleep-on:   #ECE3FF;
+  --block-cal:        oklch(94% 0.03 250);
+  --block-cal-ink:    oklch(38% 0.10 260);
+  --block-cal-line:   oklch(82% 0.06 250);
+  /* User-created Events use a distinct cool-teal palette so they don't
+   * collide visually with ICS-imported calendar blocks. */
+  --block-event:      oklch(94% 0.04 195);
+  --block-event-ink:  oklch(38% 0.10 200);
+  --block-event-line: oklch(82% 0.07 195);
+  --block-rout:       oklch(94% 0.05 75);
+  --block-rout-ink:   oklch(40% 0.10 60);
+  --block-rout-line:  oklch(82% 0.10 70);
+
+  /* FIRE accent */
+  --fire:         oklch(58% 0.20 30);
+  --fire-soft:    oklch(94% 0.04 30);
+  --fire-line:    oklch(86% 0.06 30);
+
+  /* Radii */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r:    12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+
+  /* Timeline */
+  --gutter-w:     56px;
+  --hour-h:       88px;
+  --timeline-gutter: #FBF8F0;
+  --timeline-line:   #E8DFCF;
+  --timeline-time:   #8A7D65;
+
+  --ring:         rgba(26, 23, 14, 0.25);
 }
 
 html.dark,
 html[data-theme="dark"] {
-  --bg: #09090b;
-  --surface: #18181b;
-  --surface-muted: #111113;
-  --rail: #111113;
-  --border: #27272a;
-  --border-strong: #3f3f46;
-  --text: #f4f4f5;
-  --text-muted: #a1a1aa;
-  --text-subtle: #71717a;
-  --accent: #818cf8;
-  --accent-hover: #a5b4fc;
-  --accent-soft: rgba(99, 102, 241, 0.18);
-  --ring: rgba(129, 140, 248, 0.45);
+  --canvas:       #14110A;
+  --bg:           #1A1610;
+  --card:         #221D14;
+  --sunken:       #1A1610;
+  --hover:        #2A2419;
+
+  --line:         #2F291E;
+  --line-soft:    #25201A;
+  --line-strong:  #4A4232;
+
+  --ink:          #F5EDD6;
+  --ink-2:        #C9C3B0;
+  --ink-3:        #98937F;
+  --ink-4:        #5C5849;
+
+  --t0:           #F5EDD6;
+  --t0-soft:      rgba(245, 237, 214, 0.10);
+  --t1:           oklch(70% 0.16 305);
+  --t1-soft:      oklch(28% 0.08 305);
+  --t1-line:      oklch(40% 0.10 305);
+  --t1-on:        #14110A;
+  --t2:           oklch(75% 0.13 60);
+  --t2-soft:      oklch(30% 0.07 60);
+  --t2-line:      oklch(45% 0.10 60);
+  --t2-on:        #14110A;
+
+  --block-sleep:      oklch(40% 0.14 295);
+  --block-sleep-on:   #ECE3FF;
+  --block-cal:        oklch(28% 0.06 250);
+  --block-cal-ink:    oklch(78% 0.08 250);
+  --block-cal-line:   oklch(40% 0.08 250);
+  --block-event:      oklch(28% 0.06 195);
+  --block-event-ink:  oklch(78% 0.08 200);
+  --block-event-line: oklch(40% 0.08 195);
+  --block-rout:       oklch(28% 0.06 75);
+  --block-rout-ink:   oklch(78% 0.10 70);
+  --block-rout-line:  oklch(40% 0.08 70);
+
+  --fire:         oklch(70% 0.18 30);
+  --fire-soft:    oklch(30% 0.10 30);
+  --fire-line:    oklch(45% 0.12 30);
+
+  --ring:         rgba(245, 237, 214, 0.30);
+  --timeline-gutter: #18140E;
+  --timeline-line:   #30291E;
+  --timeline-time:   #B4A98F;
   color-scheme: dark;
 }
 
-* {
-  box-sizing: border-box;
+@theme inline {
+  --font-sans: var(--font-ui), system-ui, sans-serif;
+  --font-display: var(--font-disp), "DM Sans", serif;
+  --font-mono: var(--font-mono), "JetBrains Mono", monospace;
+
+  --color-canvas: var(--canvas);
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-sunken: var(--sunken);
+  --color-hover: var(--hover);
+
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-line-strong: var(--line-strong);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  --color-fire: var(--fire);
+  --color-fire-soft: var(--fire-soft);
+  --color-fire-line: var(--fire-line);
+  --color-timeline-gutter: var(--timeline-gutter);
+  --color-timeline-line: var(--timeline-line);
+  --color-timeline-time: var(--timeline-time);
+
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
 
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 13.5px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "cv02";
 }
 
-button,
-input,
-textarea,
-select {
+button, input, textarea, select {
   font: inherit;
   color: inherit;
 }
 
-input,
-textarea,
-select {
+input, textarea, select {
   background-color: transparent;
 }
 
 html.dark input,
 html.dark textarea,
-html.dark select {
-  color-scheme: dark;
-}
-
+html.dark select,
 html[data-theme="dark"] input,
 html[data-theme="dark"] textarea,
 html[data-theme="dark"] select {
@@ -84,89 +188,32 @@ html[data-theme="dark"] select {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background-color: #e4e4e7;
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background-clip: content-box;
-  transition: background-color 0.2s ease;
+  background-color: var(--line);
+  border-radius: 99px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #a1a1aa;
-  background-clip: content-box;
-}
-
-html.dark ::-webkit-scrollbar-thumb {
-  background-color: #3f3f46;
-}
-
-html[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background-color: #3f3f46;
-}
-
-html.dark ::-webkit-scrollbar-thumb:hover {
-  background-color: #71717a;
-}
-
-html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background-color: #71717a;
+  background-color: var(--line-strong);
 }
 
 ::selection {
-  background: var(--accent-soft);
-  color: var(--accent-hover);
+  background: var(--t0-soft);
+  color: var(--ink);
 }
 
-:is(html.dark, html[data-theme="dark"]) body,
-:is(html.dark, html[data-theme="dark"]) main {
-  background-color: var(--bg) !important;
-  color: var(--text) !important;
+/* `data-task-pulse` is toggled by the rail's SleepStatusRow when the user
+ * clicks "Tonight" / "Last night" — we scroll the corresponding block into
+ * view and flash a soft outline for ~1.4s so it's easy to spot. */
+@keyframes lr-pulse-once {
+  0%   { box-shadow: 0 0 0 0 var(--ring); }
+  40%  { box-shadow: 0 0 0 6px var(--ring); }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
-
-:is(html.dark, html[data-theme="dark"]) .bg-white {
-  background-color: var(--surface) !important;
-}
-
-:is(html.dark, html[data-theme="dark"]) .bg-zinc-50,
-:is(html.dark, html[data-theme="dark"]) .bg-zinc-50\/30,
-:is(html.dark, html[data-theme="dark"]) .bg-zinc-50\/40,
-:is(html.dark, html[data-theme="dark"]) .bg-zinc-50\/60 {
-  background-color: var(--surface-muted) !important;
-}
-
-:is(html.dark, html[data-theme="dark"]) .bg-zinc-100,
-:is(html.dark, html[data-theme="dark"]) .bg-zinc-100\/70,
-:is(html.dark, html[data-theme="dark"]) .bg-zinc-100\/60 {
-  background-color: #27272a !important;
-}
-
-:is(html.dark, html[data-theme="dark"]) .border-zinc-100,
-:is(html.dark, html[data-theme="dark"]) .border-zinc-100\/50,
-:is(html.dark, html[data-theme="dark"]) .border-zinc-200,
-:is(html.dark, html[data-theme="dark"]) .border-zinc-300 {
-  border-color: var(--border) !important;
-}
-
-:is(html.dark, html[data-theme="dark"]) .text-zinc-900,
-:is(html.dark, html[data-theme="dark"]) .text-zinc-800 {
-  color: var(--text) !important;
-}
-
-:is(html.dark, html[data-theme="dark"]) .text-zinc-700,
-:is(html.dark, html[data-theme="dark"]) .text-zinc-600 {
-  color: #d4d4d8 !important;
-}
-
-:is(html.dark, html[data-theme="dark"]) .text-zinc-500,
-:is(html.dark, html[data-theme="dark"]) .text-zinc-400 {
-  color: var(--text-muted) !important;
+[data-task-pulse="true"] > * {
+  animation: lr-pulse-once 1.4s ease-out;
+  border-radius: 12px;
 }

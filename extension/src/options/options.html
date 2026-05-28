@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lizhi Routine — Extension settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Lizhi Routine — Extension settings</h1>
+      <p class="lead">
+        Connect this extension to your Lizhi Routine account. Generate a
+        token in the app under <em>Settings → Extension access</em>.
+      </p>
+
+      <form id="settings-form">
+        <label class="field">
+          <span class="label">Lizhi Routine URL</span>
+          <input
+            id="base-url"
+            type="url"
+            required
+            placeholder="https://your-deployment.example.com"
+          />
+          <span class="hint">
+            Use <code>http://localhost:3000</code> when developing locally.
+          </span>
+        </label>
+
+        <label class="field">
+          <span class="label">API token</span>
+          <input
+            id="api-token"
+            type="password"
+            required
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="lzr_…"
+          />
+          <span class="hint">
+            Starts with <code>lzr_</code>. Stored locally in this browser
+            only; revoke any time from the app's settings page.
+          </span>
+        </label>
+
+        <div class="actions">
+          <button type="button" id="test" class="ghost">Test connection</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+
+      <div id="status" class="status hidden" role="status"></div>
+    </main>
+    <script src="options.js" defer></script>
+  </body>
+</html>

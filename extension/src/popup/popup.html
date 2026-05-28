@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lizhi Routine — Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div id="root">
+      <header>
+        <h1>Lizhi Capture</h1>
+        <button id="open-options" class="icon-btn" title="Settings">⚙</button>
+      </header>
+
+      <section id="page-preview" class="card hidden">
+        <div class="page-title" id="page-title"></div>
+        <div class="page-meta" id="page-meta"></div>
+        <div class="page-snippet" id="page-snippet"></div>
+      </section>
+
+      <section id="onboarding" class="card hidden">
+        <p>Set your Lizhi Routine URL and API token to start capturing.</p>
+        <button id="open-options-cta" class="primary">Open settings</button>
+      </section>
+
+      <section id="insight-section" class="hidden">
+        <label for="insight" class="label">Your notes (optional)</label>
+        <textarea
+          id="insight"
+          rows="2"
+          maxlength="2000"
+          placeholder="e.g. I have a partial draft, or new to this topic"
+          spellcheck="false"
+        ></textarea>
+      </section>
+
+      <section id="picker" class="hidden">
+        <label class="label">Attach to existing todo</label>
+        <input
+          id="search"
+          type="search"
+          placeholder="Search todos…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div id="todo-list" class="todo-list" role="listbox"></div>
+      </section>
+
+      <section id="actions" class="actions hidden">
+        <button id="create-new" class="ghost">Create new todo</button>
+        <button id="attach" class="primary" disabled>Attach</button>
+      </section>
+
+      <div id="status" class="status hidden" role="status"></div>
+    </div>
+    <script src="popup.js" defer></script>
+  </body>
+</html>

@@ -59,12 +59,12 @@ export function DraggableBlock({
       ref={setNodeRef}
       style={{ ...style, ...transformStyle }}
       className={cn(
-        "group relative cursor-grab select-none touch-none overflow-hidden rounded-lg border transition-all duration-150 active:cursor-grabbing",
-        "hover:shadow-sm hover:border-zinc-200 dark:hover:border-zinc-700",
-        compact ? "px-2 py-1 pl-3" : "p-3 pl-3.5",
+        "group relative cursor-grab select-none touch-none overflow-hidden rounded-[10px] border bg-[color:var(--card)] transition-all duration-150 active:cursor-grabbing",
+        "hover:-translate-y-px hover:shadow-[0_4px_14px_-4px_rgba(20,18,10,0.16)]",
+        compact ? "px-3 py-1.5" : "px-3.5 py-2.5",
         tokens.block,
-        isDragging && "z-50 opacity-90 shadow-lg shadow-zinc-900/10",
-        disabled && "cursor-default active:cursor-default",
+        isDragging && "z-50 opacity-90 shadow-[0_8px_24px_-6px_rgba(20,18,10,0.22)]",
+        disabled && "cursor-default active:cursor-default hover:translate-y-0",
         className,
       )}
       {...(!disabled ? listeners : undefined)}
@@ -74,22 +74,22 @@ export function DraggableBlock({
       <span
         aria-hidden="true"
         className={cn(
-          "absolute inset-y-1.5 left-1.5 w-0.5 rounded-full",
+          "absolute inset-y-0 left-0 w-[4px]",
           inverse ? "bg-white/70" : tokens.accent,
         )}
       />
       {children ?? (
         <div
           className={cn(
-            "ml-1 flex min-w-0 items-center gap-1.5 leading-none",
-            compact ? "text-[11px]" : "text-[13px]",
-            inverse ? "text-white" : "text-zinc-900 dark:text-zinc-100",
+            "ml-1 flex min-w-0 items-center gap-2 leading-none",
+            compact ? "text-[12px]" : "text-[13.5px]",
+            inverse ? "text-white" : "text-[color:var(--ink)]",
           )}
         >
           <span
             className={cn(
-              "shrink-0 rounded px-1.5 py-0.5 font-semibold tracking-wide",
-              compact ? "text-[9px]" : "text-[10px]",
+              "shrink-0 inline-flex items-center h-4 px-1.5 rounded-[4px] font-[family-name:var(--font-mono)] font-semibold tracking-[0.04em]",
+              compact ? "text-[9.5px]" : "text-[10px]",
               inverse ? "bg-white/15 text-white" : tokens.chip,
             )}
           >
@@ -100,12 +100,14 @@ export function DraggableBlock({
               {icon}
             </span>
           ) : null}
-          <span className="min-w-0 truncate font-semibold">{title}</span>
+          <span className="min-w-0 truncate font-semibold tracking-[-0.01em]">
+            {title}
+          </span>
           <span
             className={cn(
-              "inline-flex shrink-0 items-center gap-1 font-medium",
-              compact ? "text-[10px]" : "text-[11px]",
-              inverse ? "text-white/70" : "text-zinc-500 dark:text-zinc-400",
+              "inline-flex shrink-0 items-center gap-1 font-[family-name:var(--font-mono)] tracking-[0.03em]",
+              compact ? "text-[10px]" : "text-[10.5px]",
+              inverse ? "text-white/70" : "text-[color:var(--ink-3)]",
             )}
           >
             <Clock aria-hidden="true" className="h-3 w-3" />

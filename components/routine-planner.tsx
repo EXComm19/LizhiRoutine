@@ -2,15 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
+import { createPortal } from "react-dom";
 import {
-  CollisionDetection,
   DndContext,
   DragEndEvent,
   DragOverlay,
   DragStartEvent,
   PointerSensor,
-  pointerWithin,
-  rectIntersection,
   useDroppable,
   useDraggable,
   useSensor,
@@ -24,50 +22,66 @@ import {
   CalendarRange,
   Check,
   CheckSquare,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CirclePlus,
   Clock,
   Coffee,
   Dumbbell,
-  Flame,
+  Eye,
+  EyeOff,
   Flag,
-  Lock,
-  Link,
   Laptop,
+  MapPin,
   Moon,
   MoveVertical,
-  Pencil,
-  RotateCcw,
+  Navigation,
+  Paperclip,
+  Plus,
+  RefreshCcw,
+  Settings,
   ShowerHead,
+  Sparkles,
   Sun,
   Trash2,
   Utensils,
-  Upload,
+  X,
   Zap,
 } from "lucide-react";
+import NextLink from "next/link";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { DraggableBlock } from "@/components/draggable-block";
-import { parseIcsCalendar } from "@/lib/calendar-import";
-import type { ImportedCalendarEvent } from "@/lib/calendar-import";
-import type {
-  ParsedTodoCandidate,
-  ParseTodosResponse,
-} from "@/lib/ai-todo-parser";
+import type { ParsedTodoCandidate } from "@/lib/ai-todo-parser";
 import type {
   BlockKind,
   Category,
+  CommuteConfig,
+  CommuteEstimate,
+  CommuteMode,
+  CommuteTimeStrategy,
   DragPayload,
+  EventItem,
   Period,
   RoutineTemplate,
   RoutineIconName,
+  SleepRecord,
   Task,
   TodoItem,
   TodoList,
   TodoListColor,
 } from "@/lib/schema";
+import type { CommuteEstimateResponse } from "@/lib/commute";
 import {
+  COMMUTE_MODES,
+  COMMUTE_TIME_STRATEGIES,
+  commuteModeLabel,
+  commuteTimeStrategyLabel,
+  compactRouteLabel,
+  isCommuteTemplate,
+} from "@/lib/commute";
+import {
+  createEvent,
   createTodo,
   createTodoList,
   createTask,
@@ -81,11 +95,17 @@ import {
 import {
   loadAllDays,
   loadDay,
+  loadEvents,
+  loadSleepRecords,
   loadPeriods,
   loadPreferences,
   loadTemplates,
   loadTodoLists,
   loadTodos,
+  backfillEstimateActualsOnce,
+  migrateLegacyTodosOnce,
+  saveEvents,
+  saveSleepRecords,
   savePeriods,
   savePreferences,
   saveDay,
@@ -107,38 +127,118 @@ import {
 } from "@/lib/colors";
 import {
   EmptyState,
-  SectionHeader,
 } from "@/components/planner/primitives";
+import type {
+  CalendarDay,
+  CalendarView,
+  CurrentTimeMarker,
+  DeadlineMarker,
+  LeftRailView,
+  StatsListRow,
+  StatsRoutineRow,
+  StatsSummary,
+  StatsTodoRow,
+  SunTimes,
+  TodoWithMeta,
+  VisibleTask,
+} from "@/components/planner/types";
+import {
+  addMonths,
+  backfillRoutineSourceIds,
+  buildCompletionStats,
+  buildEstimateAccuracyStats,
+  buildSleepStats,
+  buildStatsSummary,
+  clampNumber,
+  colorForImportedList,
+  commuteConfigFromEstimate,
+  commuteEstimateMatchesConfig,
+  compareTodosByDueDate,
+  currentTimeMarkerForDate,
+  daysUntilTodoDue,
+  deadlineHoverTitle,
+  deadlineMarkersForDate,
+  endTimeToTimelineMinutes,
+  estimateCommute,
+  fallbackSunTimes,
+  fetchSunTimes,
+  formatCalendarTitle,
+  formatCompactDate,
+  formatDayNumber,
+  formatTimelineScaleLabel,
+  formatTodoDue,
+  hasPointerCoordinates,
+  isDragPayload,
+  isSameMonth,
+  listNameKey,
+  monthDateKeys,
+  monthTaskHoverTitle,
+  ownerDateKey,
+  parseTags,
+  startOfWeek,
+  timelineCollisionDetection,
+  todoDueSortKey,
+  eventUrgencyTokens,
+  todoDueUrgencyTokens,
+  todoHoverTitle,
+  visibleTasksForDate,
+  weekDateKeys,
+} from "@/components/planner/helpers";
+import {
+  EVENT_TYPE_ICONS,
+  EventsPanel,
+} from "@/components/planner/EventsPanel";
 import { PeriodsPanel } from "@/components/planner/PeriodsPanel";
+import { AgentPanel } from "@/components/planner/AgentPanel";
+import {
+  EstimateAccuracyLine,
+  TodoContextPanel,
+  TodoEstimateProgressBar,
+} from "@/components/planner/TodoContextPanel";
+import {
+  EDITOR_BODY_CLASS,
+  EDITOR_CARD_CLASS,
+  EDITOR_DELETE_BUTTON_CLASS,
+  EDITOR_INPUT_CLASS,
+  EDITOR_LABEL_CLASS,
+  EDITOR_META_CLASS,
+  EDITOR_PLAIN_INPUT_CLASS,
+  EDITOR_PLAIN_VALUE_CLASS,
+  EDITOR_ROW_CLASS,
+  EditorFooter,
+  EditorHeader,
+  EditorMetaDot,
+  EditorModal,
+  EditorTierSegment,
+  formatEditorDuration,
+} from "@/components/planner/editor";
 import { AuthDialog } from "@/components/auth/AuthDialog";
 import { AccountButton } from "@/components/auth/AccountButton";
+import { SyncConflictDialog } from "@/components/auth/SyncConflictDialog";
 import { useAuth } from "@/lib/auth";
 import {
   DAY_START_HOUR,
   SNAP_MINUTES,
   TIMELINE_HEIGHT,
   TOTAL_MINUTES,
+  activeTimelineDayKey,
   addDays,
   dateForTimelineMinutes,
-  dateKeysBetween,
   formatDateKey,
+  formatDayLabel,
   formatDuration,
   formatTimeFromMinutes,
   minutesFromStart,
   minutesToPixels,
-  overlapsTimeline,
-  parseHmToMinutes,
   wallTimeToTimelineMinutes,
   parseDateKey,
   pixelsToMinutes,
   snapMinutes,
   timelineHours,
   todayKey,
-  visibleRange,
 } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
-const FIRE_TARGET_MINUTES = 6 * 60;
 const DEFAULT_ALLOCATION_MINUTES = 30;
 const LEFT_RAIL_DEFAULT_WIDTH = 360;
 const RIGHT_RAIL_DEFAULT_WIDTH = 360;
@@ -147,31 +247,32 @@ const LEFT_RAIL_MAX_WIDTH = 520;
 const RIGHT_RAIL_MIN_WIDTH = 320;
 const RIGHT_RAIL_MAX_WIDTH = 500;
 const CENTER_MIN_WIDTH = 620;
+const DAY_TIMELINE_GUTTER_WIDTH = 60;
+const DAY_TIMELINE_CONTENT_LEFT = 76;
+const DAY_TIMELINE_LEFT_CLASS = "left-[76px]";
+const DAY_TIMELINE_RIGHT_CLASS = "right-8";
 const PANE_WIDTHS_STORAGE_KEY = "lizhi-routine:pane-widths";
 const THEME_STORAGE_KEY = "lizhi-routine:theme";
+const CALENDAR_TODO_SORT_STORAGE_KEY = "lizhi-routine:calendar-todo-sort";
+const CALENDAR_EVENTS_HEIGHT_STORAGE_KEY = "lizhi-routine:calendar-events-height";
+const CALENDAR_EVENTS_HEIGHT_DEFAULT = 200;
+const CALENDAR_EVENTS_HEIGHT_MIN = 80;
+const CALENDAR_EVENTS_HEIGHT_MAX = 480;
+const HIDE_DONE_REMINDERS_STORAGE_KEY = "lizhi-routine:hide-done-reminders";
 const CATEGORY_OPTIONS: Category[] = ["T0", "T1", "T2"];
-const TODO_LIST_COLORS: TodoListColor[] = [
-  "blue",
-  "emerald",
-  "amber",
-  "rose",
-  "violet",
-  "zinc",
-];
 const CALENDAR_BLOCK_CLASS =
   "border-violet-300 bg-violet-100/90 dark:border-violet-400/45 dark:bg-violet-500/25";
+// Distinct from ICS-imported calendar blocks. User-created Events render in
+// the cool-teal palette defined in globals.css.
+const EVENT_BLOCK_CLASS =
+  "border-[color:var(--block-event-line)] bg-[color:var(--block-event)] text-[color:var(--block-event-ink)] hover:border-[color:var(--block-event-line)] hover:bg-[color:var(--block-event)]";
 const SLEEP_BLOCK_CLASS =
-  "border-purple-950 bg-purple-950 text-white shadow-purple-950/20 hover:border-purple-900 hover:bg-purple-900 dark:border-purple-700 dark:bg-purple-950 dark:text-white dark:hover:bg-purple-900";
+  "border-[color:var(--block-sleep)] bg-[color:var(--block-sleep)] text-[color:var(--block-sleep-on)] shadow-[0_8px_22px_-14px_rgba(40,0,70,0.45)] hover:border-[color:var(--block-sleep)] hover:bg-[color:var(--block-sleep)]";
 const SLEEP_MONTH_BLOCK_CLASS =
-  "border border-purple-950 bg-purple-950 text-white dark:border-purple-700 dark:bg-purple-950 dark:text-white";
-const BLOCK_EDITOR_INPUT_CLASS =
-  "mt-1 h-8 w-full rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-const WEATHER_LOCATION = {
-  latitude: -33.8688,
-  longitude: 151.2093,
-  label: "Sydney",
-};
-const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
+  "border border-[color:var(--block-sleep)] bg-[color:var(--block-sleep)] text-[color:var(--block-sleep-on)]";
+// Shared editor primitives + class constants live in
+// `@/components/planner/editor` so PeriodEditor (in PeriodsPanel.tsx) can
+// reuse them without a circular import.
 
 const newTaskDefaults = {
   title: "New todo",
@@ -198,566 +299,6 @@ const ROUTINE_ICON_OPTIONS: Array<{
   { value: "coffee", label: "Break" },
   { value: "shower", label: "Shower" },
 ];
-
-const timelineCollisionDetection: CollisionDetection = (args) => {
-  const pointerCollisions = pointerWithin(args);
-  if (pointerCollisions.length > 0) return pointerCollisions;
-
-  return rectIntersection(args);
-};
-
-type VisibleTask = Task & {
-  storageDateKey: string;
-  topMinutes: number;
-  visibleDurationMinutes: number;
-  continuesBefore: boolean;
-  continuesAfter: boolean;
-  displayColor?: TodoListColor;
-  displayIcon?: RoutineIconName;
-  displayListName?: string;
-};
-
-type DeadlineMarker = {
-  id: string;
-  todoId: string;
-  title: string;
-  category: Category;
-  dateKey: string;
-  topMinutes: number;
-  timeLabel: string;
-  hasExplicitTime: boolean;
-  stackIndex: number;
-};
-
-type CurrentTimeMarker = {
-  topMinutes: number;
-  label: string;
-};
-
-type LeftRailView = "calendar" | "reminders" | "periods";
-type CalendarView = "day" | "week" | "month" | "stats";
-
-type CalendarDay = {
-  dateKey: string;
-  tasks: VisibleTask[];
-  deadlines: DeadlineMarker[];
-};
-
-type TodoWithMeta = TodoItem & {
-  allocatedMinutes: number;
-  list: TodoList;
-};
-
-type StatsRoutineRow = {
-  id: string;
-  title: string;
-  category: Category;
-  minutes: number;
-  kind: Task["kind"];
-  linked: boolean;
-};
-
-type StatsTodoRow = {
-  id: string;
-  title: string;
-  listName: string;
-  category: Category;
-  minutes: number;
-  linked: boolean;
-};
-
-type StatsListRow = {
-  id: string;
-  name: string;
-  minutes: number;
-};
-
-type StatsSummary = {
-  routineRows: StatsRoutineRow[];
-  todoRows: StatsTodoRow[];
-  listRows: StatsListRow[];
-  routineMinutes: number;
-  todoMinutes: number;
-};
-
-type SunTimes = {
-  sunriseLabel: string;
-  sunsetLabel: string;
-  sunriseOffsetMinutes: number;
-  sunsetOffsetMinutes: number;
-  locationLabel: string;
-  source: "open-meteo" | "fallback";
-};
-
-type OpenMeteoSunResponse = {
-  daily?: {
-    sunrise?: string[];
-    sunset?: string[];
-  };
-};
-
-function addMonths(dateKey: string, months: number) {
-  const date = parseDateKey(dateKey);
-  const originalDay = date.getDate();
-  date.setDate(1);
-  date.setMonth(date.getMonth() + months);
-
-  const lastDay = new Date(
-    date.getFullYear(),
-    date.getMonth() + 1,
-    0,
-  ).getDate();
-  date.setDate(Math.min(originalDay, lastDay));
-  return formatDateKey(date);
-}
-
-function startOfWeek(dateKey: string) {
-  const date = parseDateKey(dateKey);
-  const day = date.getDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  date.setDate(date.getDate() + mondayOffset);
-  return formatDateKey(date);
-}
-
-function weekDateKeys(dateKey: string) {
-  const start = startOfWeek(dateKey);
-  return Array.from({ length: 7 }, (_, index) => addDays(start, index));
-}
-
-function monthDateKeys(dateKey: string) {
-  const date = parseDateKey(dateKey);
-  date.setDate(1);
-  const gridStart = startOfWeek(formatDateKey(date));
-  return Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
-}
-
-function isSameMonth(dateKey: string, referenceDateKey: string) {
-  const date = parseDateKey(dateKey);
-  const reference = parseDateKey(referenceDateKey);
-  return (
-    date.getMonth() === reference.getMonth() &&
-    date.getFullYear() === reference.getFullYear()
-  );
-}
-
-function formatDayNumber(dateKey: string) {
-  return new Intl.DateTimeFormat("en-AU", { day: "numeric" }).format(
-    parseDateKey(dateKey),
-  );
-}
-
-function formatCompactDate(dateKey: string) {
-  return new Intl.DateTimeFormat("en-AU", {
-    month: "short",
-    day: "numeric",
-  }).format(parseDateKey(dateKey));
-}
-
-function formatCalendarTitle(dateKey: string, view: CalendarView) {
-  const date = parseDateKey(dateKey);
-
-  if (view === "stats") {
-    return "Statistics";
-  }
-
-  if (view === "month") {
-    return new Intl.DateTimeFormat("en-AU", {
-      month: "long",
-      year: "numeric",
-    }).format(date);
-  }
-
-  if (view === "week") {
-    const days = weekDateKeys(dateKey);
-    return `${formatCompactDate(days[0])} - ${formatCompactDate(days[6])}, ${parseDateKey(days[6]).getFullYear()}`;
-  }
-
-  return new Intl.DateTimeFormat("en-AU", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
-}
-
-function deadlineMarkersForDate(
-  dateKey: string,
-  todos: TodoItem[],
-): DeadlineMarker[] {
-  const stackCounts = new Map<number, number>();
-
-  return todos
-    .filter(
-      (todo) =>
-        todo.status !== "completed" &&
-        todo.due_date === dateKey,
-    )
-    .map((todo) => {
-      const hasExplicitTime = Boolean(todo.due_time);
-      const timeLabel = todo.due_time ?? "24:00";
-      const topMinutes = wallTimeToTimelineMinutes(timeLabel);
-
-      return {
-        id: `deadline:${todo.id}`,
-        todoId: todo.id,
-        title: todo.title,
-        category: todo.category,
-        dateKey,
-        topMinutes,
-        timeLabel,
-        hasExplicitTime,
-        stackIndex: 0,
-      };
-    })
-    .sort((a, b) => a.topMinutes - b.topMinutes || a.title.localeCompare(b.title))
-    .map((marker) => {
-      const stackIndex = stackCounts.get(marker.topMinutes) ?? 0;
-      stackCounts.set(marker.topMinutes, stackIndex + 1);
-      return { ...marker, stackIndex };
-    });
-}
-
-function parseHourLabelToWallMinutes(label: string) {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(label);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-  return Math.max(0, Math.min(24 * 60, hours * 60 + minutes));
-}
-
-function formatRoundedHourLabel(minutes: number) {
-  const rounded = Math.max(0, Math.min(24 * 60, Math.round(minutes / 60) * 60));
-  if (rounded === 24 * 60) return "24:00";
-  const hours = Math.floor(rounded / 60);
-  return `${String(hours).padStart(2, "0")}:00`;
-}
-
-function roundLocalIsoToHourLabel(value: string) {
-  const match = /T(\d{2}):(\d{2})/.exec(value);
-  if (!match) return null;
-  return formatRoundedHourLabel(Number(match[1]) * 60 + Number(match[2]));
-}
-
-function wallLabelToSameDayTimelineOffset(label: string) {
-  const wallMinutes = parseHourLabelToWallMinutes(label);
-  if (wallMinutes === null) return 0;
-  const dayStartMinutes = DAY_START_HOUR * 60;
-  return clampNumber(wallMinutes - dayStartMinutes, 0, TOTAL_MINUTES);
-}
-
-function sunTimesFromLabels(
-  sunriseLabel: string,
-  sunsetLabel: string,
-  source: SunTimes["source"],
-): SunTimes {
-  return {
-    sunriseLabel,
-    sunsetLabel,
-    sunriseOffsetMinutes: wallLabelToSameDayTimelineOffset(sunriseLabel),
-    sunsetOffsetMinutes: wallLabelToSameDayTimelineOffset(sunsetLabel),
-    locationLabel: WEATHER_LOCATION.label,
-    source,
-  };
-}
-
-function fallbackSunTimes() {
-  return sunTimesFromLabels("06:00", "22:00", "fallback");
-}
-
-async function fetchSunTimes(dateKey: string, signal: AbortSignal) {
-  const url = new URL(OPEN_METEO_FORECAST_URL);
-  url.searchParams.set("latitude", String(WEATHER_LOCATION.latitude));
-  url.searchParams.set("longitude", String(WEATHER_LOCATION.longitude));
-  url.searchParams.set("daily", "sunrise,sunset");
-  url.searchParams.set("timezone", "auto");
-  url.searchParams.set("start_date", dateKey);
-  url.searchParams.set("end_date", dateKey);
-
-  const response = await fetch(url, { signal });
-  if (!response.ok) {
-    throw new Error("Unable to load sunrise and sunset");
-  }
-
-  const data = (await response.json()) as OpenMeteoSunResponse;
-  const sunriseLabel = data.daily?.sunrise?.[0]
-    ? roundLocalIsoToHourLabel(data.daily.sunrise[0])
-    : null;
-  const sunsetLabel = data.daily?.sunset?.[0]
-    ? roundLocalIsoToHourLabel(data.daily.sunset[0])
-    : null;
-
-  if (!sunriseLabel || !sunsetLabel) {
-    throw new Error("Sunrise or sunset missing from weather response");
-  }
-
-  return sunTimesFromLabels(sunriseLabel, sunsetLabel, "open-meteo");
-}
-
-function visibleTasksForDate(
-  dateKey: string,
-  tasksForDay: Task[],
-  previousDayTasks: Task[],
-  todoById: Map<string, TodoItem>,
-  todoListById: Map<string, TodoList>,
-  templateById: Map<string, RoutineTemplate>,
-) {
-  const toVisible = (task: Task, storageDateKey: string): VisibleTask | null => {
-    if (!overlapsTimeline(task.start_time, task.duration_minutes, dateKey)) {
-      return null;
-    }
-
-    const range = visibleRange(task.start_time!, task.duration_minutes, dateKey);
-    const linkedTodo = task.source_id ? todoById.get(task.source_id) : null;
-    const linkedList = linkedTodo ? todoListById.get(linkedTodo.list_id) : null;
-    const linkedTemplate =
-      task.source_id && (task.kind === "routine" || task.kind === "sleep")
-        ? templateById.get(task.source_id)
-        : null;
-    return {
-      ...task,
-      title: linkedTodo?.title ?? task.title,
-      category: linkedTodo?.category ?? task.category,
-      displayColor: linkedList?.color ?? linkedTemplate?.color,
-      displayIcon: linkedTemplate?.icon,
-      displayListName: linkedList?.name,
-      storageDateKey,
-      topMinutes: range.topMinutes,
-      visibleDurationMinutes: range.durationMinutes,
-      continuesBefore: range.continuesBefore,
-      continuesAfter: range.continuesAfter,
-    };
-  };
-
-  // Dedupe by id BEFORE toVisible: between selectedDate changes and the
-  // queueMicrotask hydration completing, a stale `currentTasks` /
-  // `previousTasks` cache can route the same stored task into both
-  // `previousDayTasks` and `tasksForDay` for the same cell, which would
-  // produce duplicate React keys when the cell renders. previousDayTasks
-  // comes first so it wins on collision (the "earlier owner" semantics).
-  const seenIds = new Set<string>();
-  return [...previousDayTasks, ...tasksForDay]
-    .filter((task) => {
-      if (seenIds.has(task.id)) return false;
-      seenIds.add(task.id);
-      return true;
-    })
-    .map((task) =>
-      toVisible(
-        task,
-        ownerDateKey(task.start_time ?? dateForTimelineMinutes(dateKey, 0)),
-      ),
-    )
-    .filter((task): task is VisibleTask => Boolean(task))
-    .sort((a, b) => a.topMinutes - b.topMinutes);
-}
-
-function normalizeStatsKey(value: string) {
-  return value.trim().toLocaleLowerCase();
-}
-
-function routineSourceIdForTask(task: Task, templates: RoutineTemplate[]) {
-  if (task.source_id || (task.kind !== "routine" && task.kind !== "sleep")) {
-    return null;
-  }
-
-  if (task.kind === "sleep") {
-    return templates.find((template) => template.kind === "sleep")?.id ?? null;
-  }
-
-  const normalizedTitle = normalizeStatsKey(task.title);
-  const titleMatch = templates.find(
-    (template) =>
-      template.kind === "routine" &&
-      normalizeStatsKey(template.title) === normalizedTitle,
-  );
-  if (titleMatch) return titleMatch.id;
-
-  const shapeMatch = templates.find(
-    (template) =>
-      template.kind === "routine" &&
-      template.category === task.category &&
-      template.default_duration_minutes === task.duration_minutes,
-  );
-
-  return shapeMatch?.id ?? null;
-}
-
-function backfillRoutineSourceIds(templates: RoutineTemplate[]) {
-  const changedDates = new Set<string>();
-
-  for (const day of loadAllDays()) {
-    let changed = false;
-    const tasks = day.tasks.map((task) => {
-      const sourceId = routineSourceIdForTask(task, templates);
-      if (!sourceId) return task;
-      changed = true;
-      return patchTask(task, { source_id: sourceId });
-    });
-
-    if (changed) {
-      saveDay(day.dateKey, tasks);
-      changedDates.add(day.dateKey);
-    }
-  }
-
-  return changedDates;
-}
-
-function buildStatsSummary({
-  startDate,
-  endDate,
-  todos,
-  todoLists,
-  templates,
-}: {
-  startDate: string;
-  endDate: string;
-  todos: TodoItem[];
-  todoLists: TodoList[];
-  templates: RoutineTemplate[];
-}): StatsSummary {
-  const start = startDate <= endDate ? startDate : endDate;
-  const end = startDate <= endDate ? endDate : startDate;
-  const todoById = new Map(todos.map((todo) => [todo.id, todo]));
-  const templateById = new Map(templates.map((template) => [template.id, template]));
-  const listById = new Map(todoLists.map((list) => [list.id, list]));
-  const routineRows = new Map<string, StatsRoutineRow>();
-  const todoRows = new Map<string, StatsTodoRow>();
-  const listRows = new Map<string, StatsListRow>();
-
-  for (const dateKey of dateKeysBetween(start, end)) {
-    const visible = visibleTasksForDate(
-      dateKey,
-      loadDay(dateKey),
-      loadDay(addDays(dateKey, -1)),
-      todoById,
-      listById,
-      templateById,
-    );
-
-    for (const task of visible) {
-      if (task.kind === "routine" || task.kind === "sleep") {
-        const template = task.source_id ? templateById.get(task.source_id) : null;
-        const rowId = task.source_id ?? `unlinked:${task.kind}:${task.title}:${task.category}`;
-        const existing = routineRows.get(rowId);
-        routineRows.set(rowId, {
-          id: rowId,
-          title: template?.title ?? task.title,
-          category: template?.category ?? task.category,
-          kind: task.kind,
-          linked: Boolean(template),
-          minutes: (existing?.minutes ?? 0) + task.visibleDurationMinutes,
-        });
-        continue;
-      }
-
-      if (task.kind !== "task") continue;
-
-      const todo = task.source_id ? todoById.get(task.source_id) : null;
-      const rowId = task.source_id ?? `unlinked:todo:${task.title}:${task.category}`;
-      const list = todo ? listById.get(todo.list_id) : null;
-      const existing = todoRows.get(rowId);
-      todoRows.set(rowId, {
-        id: rowId,
-        title: todo?.title ?? task.title,
-        category: todo?.category ?? task.category,
-        listName: list?.name ?? "Unlinked",
-        linked: Boolean(todo),
-        minutes: (existing?.minutes ?? 0) + task.visibleDurationMinutes,
-      });
-
-      const listId = list?.id ?? "unlinked";
-      const existingList = listRows.get(listId);
-      listRows.set(listId, {
-        id: listId,
-        name: list?.name ?? "Unlinked",
-        minutes: (existingList?.minutes ?? 0) + task.visibleDurationMinutes,
-      });
-    }
-  }
-
-  const byMinutesThenTitle = <T extends { minutes: number; title?: string; name?: string }>(
-    a: T,
-    b: T,
-  ) => b.minutes - a.minutes || (a.title ?? a.name ?? "").localeCompare(b.title ?? b.name ?? "");
-
-  const routineList = [...routineRows.values()].sort(byMinutesThenTitle);
-  const todoList = [...todoRows.values()].sort(byMinutesThenTitle);
-  const listList = [...listRows.values()].sort(byMinutesThenTitle);
-
-  return {
-    routineRows: routineList,
-    todoRows: todoList,
-    listRows: listList,
-    routineMinutes: routineList.reduce((total, row) => total + row.minutes, 0),
-    todoMinutes: todoList.reduce((total, row) => total + row.minutes, 0),
-  };
-}
-
-function isDragPayload(value: unknown): value is DragPayload {
-  if (!value || typeof value !== "object" || !("type" in value)) return false;
-  return ["task", "template", "placed-task"].includes(
-    String((value as { type: unknown }).type),
-  );
-}
-
-function hasPointerCoordinates(
-  event: Event,
-): event is Event & { clientX: number; clientY: number } {
-  return "clientX" in event && "clientY" in event;
-}
-
-function ownerDateKey(startTime: string) {
-  const date = new Date(startTime);
-  if (date.getHours() < DAY_START_HOUR) {
-    date.setDate(date.getDate() - 1);
-  }
-
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function currentTimeMarkerForDate(dateKey: string, now: Date): CurrentTimeMarker | null {
-  if (ownerDateKey(now.toISOString()) !== dateKey) return null;
-
-  const wallMinutes =
-    now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
-  const dayStartMinutes = DAY_START_HOUR * 60;
-  const topMinutes =
-    wallMinutes < dayStartMinutes
-      ? wallMinutes + 24 * 60 - dayStartMinutes
-      : wallMinutes - dayStartMinutes;
-
-  if (topMinutes < 0 || topMinutes > TOTAL_MINUTES) return null;
-
-  return {
-    topMinutes,
-    label: `${String(now.getHours()).padStart(2, "0")}:${String(
-      now.getMinutes(),
-    ).padStart(2, "0")}`,
-  };
-}
-
-function calendarTaskId(sourceId: string) {
-  return `calendar-${sourceId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 120)}`;
-}
-
-function clampNumber(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function endTimeToTimelineMinutes(value: string, startMinutes: number) {
-  const dayStartMinutes = DAY_START_HOUR * 60;
-  const raw = parseHmToMinutes(value);
-  const wrapped = raw < dayStartMinutes ? raw + 24 * 60 : raw;
-  let offset = wrapped - dayStartMinutes;
-
-  if (offset <= startMinutes) {
-    offset += 24 * 60;
-  }
-
-  return offset;
-}
 
 function loadSavedPaneWidths() {
   const fallback = {
@@ -790,10 +331,81 @@ function loadSavedPaneWidths() {
 
 function loadSavedTheme() {
   if (typeof window === "undefined") return false;
+  // The `theme-init` script in app/layout.tsx already resolved the theme
+  // synchronously before React hydrated (reading localStorage, falling
+  // back to prefers-color-scheme) and toggled the `.dark` class on
+  // <html>. Trust that result instead of recomputing — keeps React's
+  // initial state in sync with the painted DOM and avoids a hydration
+  // mismatch flash if the two ever diverge.
+  if (document.documentElement.classList.contains("dark")) return true;
+  // Fallback for non-browser contexts that somehow reached here.
   const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
   if (saved === "dark") return true;
   if (saved === "light") return false;
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+}
+
+function loadSavedCalendarTodoSort() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(CALENDAR_TODO_SORT_STORAGE_KEY) === "due-date";
+}
+
+function saveCalendarTodoSort(sortByDueDate: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      CALENDAR_TODO_SORT_STORAGE_KEY,
+      sortByDueDate ? "due-date" : "manual",
+    );
+  } catch {
+    // Sorting remains usable for the current session if storage is blocked.
+  }
+}
+
+function loadSavedHideDoneReminders() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(HIDE_DONE_REMINDERS_STORAGE_KEY) === "1";
+}
+
+function saveHideDoneReminders(hide: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    if (hide) {
+      window.localStorage.setItem(HIDE_DONE_REMINDERS_STORAGE_KEY, "1");
+    } else {
+      window.localStorage.removeItem(HIDE_DONE_REMINDERS_STORAGE_KEY);
+    }
+  } catch {
+    // Toggle still works for the current session if storage is unavailable.
+  }
+}
+
+function clampCalendarEventsHeight(value: number) {
+  if (!Number.isFinite(value)) return CALENDAR_EVENTS_HEIGHT_DEFAULT;
+  return Math.min(
+    CALENDAR_EVENTS_HEIGHT_MAX,
+    Math.max(CALENDAR_EVENTS_HEIGHT_MIN, Math.round(value)),
+  );
+}
+
+function loadCalendarEventsHeight() {
+  if (typeof window === "undefined") return CALENDAR_EVENTS_HEIGHT_DEFAULT;
+  const raw = window.localStorage.getItem(CALENDAR_EVENTS_HEIGHT_STORAGE_KEY);
+  if (!raw) return CALENDAR_EVENTS_HEIGHT_DEFAULT;
+  const parsed = Number(raw);
+  return clampCalendarEventsHeight(parsed);
+}
+
+function saveCalendarEventsHeight(height: number) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      CALENDAR_EVENTS_HEIGHT_STORAGE_KEY,
+      String(clampCalendarEventsHeight(height)),
+    );
+  } catch {
+    // Resize still works for the session if storage is unavailable.
+  }
 }
 
 function applyTheme(isDarkMode: boolean) {
@@ -814,7 +426,10 @@ function applyTheme(isDarkMode: boolean) {
 }
 
 export function RoutinePlanner() {
-  const [selectedDate, setSelectedDate] = useState(todayKey());
+  // Use the active timeline day (not calendar today) so opening the app
+  // after midnight but before DAY_START_HOUR lands on the timeline window
+  // the user is conceptually still inside.
+  const [selectedDate, setSelectedDate] = useState(activeTimelineDayKey);
   const [calendarView, setCalendarView] = useState<CalendarView>("day");
   const [currentTasks, setCurrentTasks] = useState<Task[]>([]);
   const [previousTasks, setPreviousTasks] = useState<Task[]>([]);
@@ -822,11 +437,69 @@ export function RoutinePlanner() {
   const [todoLists, setTodoLists] = useState<TodoList[]>([]);
   const [templates, setTemplates] = useState<RoutineTemplate[]>([]);
   const [periods, setPeriods] = useState<Period[]>([]);
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [sleepRecords, setSleepRecords] = useState<SleepRecord[]>([]);
   const [sleepTargetMinutes, setSleepTargetMinutes] = useState(8 * 60);
-  const [resetArmed, setResetArmed] = useState(false);
+  // null = auto-hide off; 0 = hide on completion; positive = hide N days after.
+  // Hydrated from loadPreferences() after mount.
+  const [autoHideCompletedDays, setAutoHideCompletedDays] = useState<number | null>(
+    null,
+  );
   const [isHydrated, setIsHydrated] = useState(false);
   const [activeDrag, setActiveDrag] = useState<DragPayload | null>(null);
-  const [calendarImportMessage, setCalendarImportMessage] = useState("");
+  // Two-step "replace existing sleep on drop" prompt. The first drop sets
+  // this; a second drop on the same date within the window confirms a
+  // replace. Ref + state both, because handleDragEnd reads it sync (avoid
+  // stale closure) but the toast renders from state.
+  const sleepReplacePromptRef = useRef<{
+    dateKey: string;
+    expiresAt: number;
+  } | null>(null);
+  const [sleepReplacePrompt, setSleepReplacePrompt] = useState<{
+    dateKey: string;
+    expiresAt: number;
+  } | null>(null);
+  const sleepReplaceTimerRef = useRef<number | null>(null);
+
+  const SLEEP_REPLACE_WINDOW_MS = 5000;
+
+  const clearSleepReplacePrompt = useCallback(() => {
+    if (sleepReplaceTimerRef.current !== null) {
+      window.clearTimeout(sleepReplaceTimerRef.current);
+      sleepReplaceTimerRef.current = null;
+    }
+    sleepReplacePromptRef.current = null;
+    setSleepReplacePrompt(null);
+  }, []);
+
+  const requestSleepReplaceConfirmation = useCallback(
+    (dateKey: string) => {
+      if (sleepReplaceTimerRef.current !== null) {
+        window.clearTimeout(sleepReplaceTimerRef.current);
+      }
+      const entry = {
+        dateKey,
+        expiresAt: Date.now() + SLEEP_REPLACE_WINDOW_MS,
+      };
+      sleepReplacePromptRef.current = entry;
+      setSleepReplacePrompt(entry);
+      sleepReplaceTimerRef.current = window.setTimeout(() => {
+        sleepReplacePromptRef.current = null;
+        setSleepReplacePrompt(null);
+        sleepReplaceTimerRef.current = null;
+      }, SLEEP_REPLACE_WINDOW_MS);
+    },
+    [SLEEP_REPLACE_WINDOW_MS],
+  );
+
+  // Clean up the timer on unmount so a stale tick can't touch state.
+  useEffect(() => {
+    return () => {
+      if (sleepReplaceTimerRef.current !== null) {
+        window.clearTimeout(sleepReplaceTimerRef.current);
+      }
+    };
+  }, []);
   const [dataRevision, setDataRevision] = useState(0);
   const [sunTimes, setSunTimes] = useState<SunTimes>(fallbackSunTimes);
   const [now, setNow] = useState(() => new Date());
@@ -1024,54 +697,73 @@ export function RoutinePlanner() {
     [leftRailWidth, rightRailWidth, savePaneWidths],
   );
 
-  useEffect(() => {
+  const refreshPlannerState = useCallback(() => {
     queueMicrotask(() => {
-      let loadedCurrentTasks = loadDay(selectedDate);
-      let loadedTodos = loadTodos();
-      const legacyTodos = loadedCurrentTasks.filter(
-        (task) => task.kind === "task" && !task.start_time && !task.source_id,
-      );
-      if (legacyTodos.length) {
-        const existingTodoIds = new Set(loadedTodos.map((todo) => todo.id));
-        const migratedTodos = legacyTodos
-          .filter((task) => !existingTodoIds.has(task.id))
-          .map((task) =>
-            createTodo({
-              id: task.id,
-              title: task.title,
-              category: task.category,
-              status: task.status,
-              list_id: "list-inbox",
-            }),
-          );
-        loadedTodos = [...migratedTodos, ...loadedTodos];
-        saveTodos(loadedTodos);
-        saveDay(
-          selectedDate,
-          loadedCurrentTasks.filter((task) => !legacyTodos.includes(task)),
-        );
-      }
+      // One-shot migrations are idempotent after their flag is set; safe to
+      // call on every refresh because they early-return.
+      migrateLegacyTodosOnce();
+      backfillEstimateActualsOnce();
 
+      let loadedCurrentTasks = loadDay(selectedDate);
       const loadedTemplates = loadTemplates();
       const backfilledRoutineDates = backfillRoutineSourceIds(loadedTemplates);
       if (backfilledRoutineDates.has(selectedDate)) {
         loadedCurrentTasks = loadDay(selectedDate);
       }
 
-      setCurrentTasks(
-        loadedCurrentTasks.filter((task) => !legacyTodos.includes(task)),
-      );
+      setCurrentTasks(loadedCurrentTasks);
       setPreviousTasks(loadDay(addDays(selectedDate, -1)));
-      setTodos(loadedTodos);
+      setTodos(loadTodos());
       setTodoLists(loadTodoLists());
       setTemplates(loadedTemplates);
       setPeriods(loadPeriods());
+      setEvents(loadEvents());
+      setSleepRecords(loadSleepRecords());
       const prefs = loadPreferences();
       setSleepTargetMinutes(prefs.sleep_target_minutes);
-      setResetArmed(false);
+      setAutoHideCompletedDays(prefs.auto_hide_completed_days);
+      setDataRevision((revision) => revision + 1);
       setIsHydrated(true);
     });
-  }, [selectedDate, cloudRevision]);
+  }, [selectedDate]);
+
+  useEffect(() => {
+    refreshPlannerState();
+  }, [refreshPlannerState, cloudRevision]);
+
+  /**
+   * The toolbar's Refresh button used to only re-read localStorage, which
+   * meant changes made on another device (Windows ↔ Mac) never showed up
+   * until you signed out and back in. This wrapper pulls from cloud first
+   * when signed in; the cloud pull bumps auth.dataRevision which triggers
+   * the refreshPlannerState effect above, so we don't need to call it
+   * twice. Falls back to a plain local refresh when signed out / cloud has
+   * no data.
+   */
+  const handleRefresh = useCallback(async () => {
+    const pulled = await auth.refreshFromCloud();
+    if (!pulled) {
+      refreshPlannerState();
+    }
+  }, [auth, refreshPlannerState]);
+
+  // Pull from cloud when the tab regains focus or becomes visible. Cheap
+  // way to catch up without standing up a realtime subscription — common
+  // case is the user alt-tabs back after editing on another device.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (auth.status !== "signed-in") return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void auth.refreshFromCloud();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [auth]);
 
   const persistSleepTarget = useCallback((value: number) => {
     setSleepTargetMinutes(value);
@@ -1111,8 +803,10 @@ export function RoutinePlanner() {
         todoById,
         todoListById,
         templateById,
+        events,
+        sleepRecords,
       ),
-    [getTasksForDate, templateById, todoById, todoListById],
+    [events, getTasksForDate, sleepRecords, templateById, todoById, todoListById],
   );
 
   const visibleTasks = useMemo<VisibleTask[]>(
@@ -1168,6 +862,29 @@ export function RoutinePlanner() {
     return totals;
   }, [dataRevision]);
 
+  // Sister of allocatedMinutesByTodo, driving the estimate progress bar.
+  // "Completed minutes" = past or today blocks linked to the todo, plus any
+  // block that's been explicitly marked status="completed" (no UX path sets
+  // that today, but the hook is here for when one lands). Future blocks
+  // don't count — they're plans, not progress.
+  const completedMinutesByTodo = useMemo(() => {
+    void dataRevision;
+    const today = todayKey();
+    const totals = new Map<string, number>();
+    for (const day of loadAllDays()) {
+      const isPastOrToday = day.dateKey <= today;
+      for (const task of day.tasks) {
+        if (task.kind !== "task" || !task.source_id) continue;
+        if (!isPastOrToday && task.status !== "completed") continue;
+        totals.set(
+          task.source_id,
+          (totals.get(task.source_id) ?? 0) + task.duration_minutes,
+        );
+      }
+    }
+    return totals;
+  }, [dataRevision]);
+
   const defaultTodoList = todoLists[0];
   const todoTasks = useMemo<TodoWithMeta[]>(
     () =>
@@ -1180,6 +897,7 @@ export function RoutinePlanner() {
             ...todo,
             list_id: list?.id ?? todo.list_id,
             allocatedMinutes: allocatedMinutesByTodo.get(todo.id) ?? 0,
+            completedMinutes: completedMinutesByTodo.get(todo.id) ?? 0,
             list,
           };
         })
@@ -1194,30 +912,47 @@ export function RoutinePlanner() {
           if (b.due_date) return 1;
           return a.title.localeCompare(b.title);
         }),
-    [allocatedMinutesByTodo, defaultTodoList, todoLists, todos],
+    [
+      allocatedMinutesByTodo,
+      completedMinutesByTodo,
+      defaultTodoList,
+      todoLists,
+      todos,
+    ],
   );
   const inboxTasks = useMemo(
     () => todoTasks.filter((task) => task.status !== "completed"),
     [todoTasks],
   );
 
-  const focusMinutes = useMemo(
-    () =>
-      visibleTasks
-        .filter(
-          (task) =>
-            task.kind === "calendar" ||
-            task.kind === "routine" ||
-            task.category === "T0" ||
-            task.category === "T1",
-        )
-        .reduce((total, task) => total + task.visibleDurationMinutes, 0),
-    [visibleTasks],
-  );
-  const focusProgress = (focusMinutes / FIRE_TARGET_MINUTES) * 100;
-
   const sleepTemplate = templates.find((template) => template.kind === "sleep");
-  const scheduledSleep = visibleTasks.find((task) => task.kind === "sleep");
+  // Split sleep into two distinct blocks so the rail can show each
+  // unambiguously. "Tonight" = sleep block whose storageDateKey is today
+  // (just placed, may carry into tomorrow). "Last night" = sleep block
+  // whose storageDateKey is yesterday and is still visible this morning
+  // (the carryover that used to be conflated with tonight's block).
+  const tonightSleep = visibleTasks.find(
+    (task) => task.kind === "sleep" && task.storageDateKey === selectedDate,
+  );
+  const lastNightSleep = visibleTasks.find(
+    (task) => task.kind === "sleep" && task.storageDateKey === previousDate,
+  );
+
+  const jumpToTask = useCallback((taskId: string) => {
+    if (typeof document === "undefined") return;
+    const node = document.querySelector<HTMLElement>(
+      `[data-task-id="${CSS.escape(taskId)}"]`,
+    );
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Flash a soft pulse so the user can spot which block they landed on,
+    // then click it to open the placed-task editor. The CSS keyframe lives
+    // in app/globals.css (`lr-pulse-once`).
+    node.setAttribute("data-task-pulse", "true");
+    window.setTimeout(() => {
+      node.removeAttribute("data-task-pulse");
+    }, 1500);
+  }, []);
 
   const activeDragPreview = useMemo(() => {
     if (!activeDrag) return null;
@@ -1383,7 +1118,12 @@ export function RoutinePlanner() {
   const deleteReminder = useCallback(
     (todoId: string) => {
       persistTodos((items) => items.filter((todo) => todo.id !== todoId));
+      // Only touch days that actually scheduled an allocation for this todo.
+      // updateTasksForDay always calls saveDay (no diff check), so each loop
+      // iteration costs a localStorage write — skipping empty days is a real
+      // speedup once the user has months of history.
       for (const day of loadAllDays()) {
+        if (!day.tasks.some((task) => task.source_id === todoId)) continue;
         updateTasksForDay(day.dateKey, (tasks) =>
           tasks.filter((task) => task.source_id !== todoId),
         );
@@ -1464,98 +1204,46 @@ export function RoutinePlanner() {
     });
   }, []);
 
-  const importCalendarEvents = useCallback(
-    (events: ImportedCalendarEvent[]) => {
-      const grouped = new Map<string, Task[]>();
+  const upsertEvent = useCallback((event: EventItem) => {
+    setEvents((current) => {
+      const exists = current.some((item) => item.id === event.id);
+      const next = exists
+        ? current.map((item) => (item.id === event.id ? event : item))
+        : [...current, event];
+      saveEvents(next);
+      return next;
+    });
+  }, []);
 
-      for (const event of events) {
-        const dateKey = ownerDateKey(event.startTime);
-        const task = createTask({
-          id: calendarTaskId(event.sourceId),
-          title: event.title,
-          category: "T1",
-          kind: "calendar",
-          duration_minutes: event.durationMinutes,
-          start_time: event.startTime,
-          locked: true,
-          source_id: event.sourceId,
-        });
-        grouped.set(dateKey, [...(grouped.get(dateKey) ?? []), task]);
-      }
-
-      let importedCount = 0;
-      for (const [dateKey, tasksForDay] of grouped) {
-        updateTasksForDay(dateKey, (existingTasks) => {
-          // Reject anything whose source_id OR task id already exists in
-          // storage, AND collapse intra-batch duplicates (two events that
-          // sanitize to the same calendarTaskId, or two VEVENTs with the
-          // same UID + start time).
-          const existingSources = new Set(
-            existingTasks
-              .map((task) => task.source_id)
-              .filter((value): value is string => Boolean(value)),
-          );
-          const existingIds = new Set(existingTasks.map((task) => task.id));
-          const seenSources = new Set<string>();
-          const seenIds = new Set<string>();
-          const freshTasks = tasksForDay.filter((task) => {
-            if (existingIds.has(task.id)) return false;
-            if (seenIds.has(task.id)) return false;
-            if (task.source_id && existingSources.has(task.source_id)) return false;
-            if (task.source_id && seenSources.has(task.source_id)) return false;
-            seenIds.add(task.id);
-            if (task.source_id) seenSources.add(task.source_id);
-            return true;
-          });
-          importedCount += freshTasks.length;
-          return [...existingTasks, ...freshTasks];
-        });
-      }
-
-      return importedCount;
-    },
-    [updateTasksForDay],
-  );
-
-  const importCalendarText = useCallback(
-    (text: string) => {
-      const events = parseIcsCalendar(text, parseDateKey(selectedDate));
-      if (!events.length) {
-        setCalendarImportMessage("No timed events found in that calendar.");
-        return;
-      }
-
-      const importedCount = importCalendarEvents(events);
-      setCalendarImportMessage(
-        importedCount
-          ? `Imported ${importedCount} fixed event${importedCount === 1 ? "" : "s"}.`
-          : "Calendar already imported.",
-      );
-    },
-    [importCalendarEvents, selectedDate],
-  );
+  const deleteEvent = useCallback((eventId: string) => {
+    setEvents((current) => {
+      const next = current.filter((event) => event.id !== eventId);
+      saveEvents(next);
+      return next;
+    });
+  }, []);
 
   const deleteTask = useCallback(
     (task: VisibleTask) => {
+      // Synthetic actual-sleep blocks live in sleepRecords state, not in
+      // the day's task storage. Delete from there instead — the block
+      // will return on the next HAE sync if the source data is still
+      // present (no soft-delete in v1).
+      if (task.id.startsWith("sleep-record:")) {
+        const recordId = task.id.slice("sleep-record:".length);
+        setSleepRecords((current) => {
+          const next = current.filter((record) => record.id !== recordId);
+          saveSleepRecords(next);
+          return next;
+        });
+        return;
+      }
       updateTasksForDay(task.storageDateKey, (tasks) =>
         tasks.filter((item) => item.id !== task.id),
       );
     },
     [updateTasksForDay],
   );
-
-  const resetDay = useCallback(() => {
-    if (!resetArmed) {
-      setResetArmed(true);
-      window.setTimeout(() => setResetArmed(false), 3000);
-      return;
-    }
-
-    updateTasksForDay(selectedDate, (tasks) =>
-      tasks.filter((task) => task.locked),
-    );
-    setResetArmed(false);
-  }, [resetArmed, selectedDate, updateTasksForDay]);
 
   const getPointerPosition = useCallback((event: DragEndEvent) => {
     const activatorEvent = event.activatorEvent;
@@ -1616,7 +1304,7 @@ export function RoutinePlanner() {
   );
 
   const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
+    async (event: DragEndEvent) => {
       setActiveDrag(null);
       const payload = event.active.data.current;
       if (!isDragPayload(payload)) {
@@ -1647,7 +1335,46 @@ export function RoutinePlanner() {
               : template.default_duration_minutes,
           start_time: startTime,
           source_id: template.id,
+          commute_config: null,
+          commute_estimate: null,
         });
+
+        // Sleep blocks are conceptually one-per-night. Silently appending a
+        // second one is almost always a mistake — warn on the first drop,
+        // accept a confirming second drop within SLEEP_REPLACE_WINDOW_MS.
+        if (template.kind === "sleep") {
+          const existingTasks =
+            destinationDate === selectedDate
+              ? currentTasks
+              : destinationDate === previousDate
+                ? previousTasks
+                : loadDay(destinationDate);
+          const hasExistingSleep = existingTasks.some(
+            (item) => item.kind === "sleep",
+          );
+
+          if (!hasExistingSleep) {
+            updateTasksForDay(destinationDate, (tasks) => [...tasks, task]);
+            return;
+          }
+
+          const pending = sleepReplacePromptRef.current;
+          const isConfirmedReplace =
+            pending !== null &&
+            pending.dateKey === destinationDate &&
+            pending.expiresAt > Date.now();
+
+          if (isConfirmedReplace) {
+            updateTasksForDay(destinationDate, (tasks) => [
+              ...tasks.filter((item) => item.kind !== "sleep"),
+              task,
+            ]);
+            clearSleepReplacePrompt();
+          } else {
+            requestSleepReplaceConfirmation(destinationDate);
+          }
+          return;
+        }
 
         updateTasksForDay(destinationDate, (tasks) => [...tasks, task]);
         return;
@@ -1678,8 +1405,14 @@ export function RoutinePlanner() {
     },
     [
       calculateDropTarget,
+      clearSleepReplacePrompt,
+      currentTasks,
       draggableVisibleTasks,
       moveTaskToDate,
+      previousDate,
+      previousTasks,
+      requestSleepReplaceConfirmation,
+      selectedDate,
       sleepTargetMinutes,
       templates,
       todoById,
@@ -1823,11 +1556,13 @@ export function RoutinePlanner() {
     [calendarView],
   );
 
+  const showRightRail = calendarView === "day" || calendarView === "week";
+
   if (!isHydrated) {
     return (
-      <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 px-6 py-6 text-zinc-900 dark:text-zinc-100">
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 text-sm text-zinc-500 dark:text-zinc-400">
-          Loading routine…
+      <main className="min-h-screen bg-[color:var(--canvas)] px-3 py-3 text-[color:var(--ink)]">
+        <div className="rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)] p-6 text-[13px] text-[color:var(--ink-3)]">
+          Loading routine...
         </div>
       </main>
     );
@@ -1841,10 +1576,10 @@ export function RoutinePlanner() {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <main className="h-screen overflow-hidden bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-        <div className="flex h-full min-w-0">
+      <main className="h-screen overflow-hidden bg-[color:var(--canvas)] p-3 text-[color:var(--ink)]">
+        <div className="flex h-full min-w-0 gap-2">
           <div
-            className="hidden min-h-0 shrink-0 lg:flex"
+            className="hidden min-h-0 shrink-0 overflow-hidden rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)] lg:flex"
             style={{ width: leftRailWidth }}
           >
             <LeftRail
@@ -1852,17 +1587,18 @@ export function RoutinePlanner() {
               todoTasks={todoTasks}
               todoLists={todoLists}
               selectedDate={selectedDate}
+              autoHideCompletedDays={autoHideCompletedDays}
               addInboxTask={addInboxTask}
               updateReminder={updateReminder}
               deleteReminder={deleteReminder}
               upsertTodoList={upsertTodoList}
               deleteTodoList={deleteTodoList}
-              importCalendarText={importCalendarText}
-              calendarImportMessage={calendarImportMessage}
-              setCalendarImportMessage={setCalendarImportMessage}
               periods={periods}
               upsertPeriod={upsertPeriod}
               deletePeriod={deletePeriod}
+              events={events}
+              upsertEvent={upsertEvent}
+              deleteEvent={deleteEvent}
             />
           </div>
 
@@ -1873,7 +1609,7 @@ export function RoutinePlanner() {
             onReset={() => resetPane("left")}
           />
 
-          <section className="flex min-h-0 min-w-[520px] flex-1 flex-col border-x border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+          <section className="flex min-h-0 min-w-[520px] flex-1 flex-col overflow-hidden rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)]">
             <TopBar
               selectedDate={selectedDate}
               calendarView={calendarView}
@@ -1882,11 +1618,10 @@ export function RoutinePlanner() {
               sunTimes={sunTimes}
               isDarkMode={isDarkMode}
               onToggleTheme={toggleTheme}
-              resetArmed={resetArmed}
-              onReset={resetDay}
+              onRefresh={() => void handleRefresh()}
               onPrevious={() => moveCalendar(-1)}
               onNext={() => moveCalendar(1)}
-              onToday={() => setSelectedDate(todayKey())}
+              onToday={() => setSelectedDate(activeTimelineDayKey())}
               accountSlot={
                 <AccountButton
                   status={auth.status}
@@ -1896,6 +1631,13 @@ export function RoutinePlanner() {
                 />
               }
             />
+            {calendarView === "day" && (
+              <DayBar
+                dateKey={selectedDate}
+                sunTimes={sunTimes}
+                scheduledCount={visibleTasks.length}
+              />
+            )}
             {calendarView === "day" && (
               <Timeline
                 tasks={visibleTasks}
@@ -1941,35 +1683,40 @@ export function RoutinePlanner() {
                 todos={todos}
                 todoLists={todoLists}
                 templates={templates}
+                sleepRecords={sleepRecords}
+                sleepTargetMinutes={sleepTargetMinutes}
                 dataRevision={dataRevision}
               />
             )}
           </section>
 
-          <PaneResizeHandle
-            label="Resize right pane"
-            onPointerDown={(event) => beginPaneResize("right", event)}
-            onKeyAdjust={(delta) => adjustPane("right", delta)}
-            onReset={() => resetPane("right")}
-          />
+          {showRightRail && (
+            <>
+              <PaneResizeHandle
+                label="Resize right pane"
+                onPointerDown={(event) => beginPaneResize("right", event)}
+                onKeyAdjust={(delta) => adjustPane("right", delta)}
+                onReset={() => resetPane("right")}
+              />
 
-          <div
-            className="hidden min-h-0 shrink-0 lg:flex"
-            style={{ width: rightRailWidth }}
-          >
-            <RightRail
-              sleepTemplate={sleepTemplate}
-              scheduledSleep={scheduledSleep}
-              sleepTargetMinutes={sleepTargetMinutes}
-              setSleepTargetMinutes={persistSleepTarget}
-              updateTask={updateTask}
-              templates={templates}
-              upsertTemplate={upsertTemplate}
-              deleteTemplate={deleteTemplate}
-              focusMinutes={focusMinutes}
-              focusProgress={focusProgress}
-            />
-          </div>
+              <div
+                className="hidden min-h-0 shrink-0 overflow-hidden rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)] lg:flex"
+                style={{ width: rightRailWidth }}
+              >
+                <RightRail
+                  sleepTemplate={sleepTemplate}
+                  tonightSleep={tonightSleep}
+                  lastNightSleep={lastNightSleep}
+                  sleepTargetMinutes={sleepTargetMinutes}
+                  setSleepTargetMinutes={persistSleepTarget}
+                  onJumpToTask={jumpToTask}
+                  templates={templates}
+                  upsertTemplate={upsertTemplate}
+                  deleteTemplate={deleteTemplate}
+                />
+              </div>
+            </>
+          )}
         </div>
         <DragOverlay dropAnimation={null}>
           {activeDragPreview ? (
@@ -1984,6 +1731,12 @@ export function RoutinePlanner() {
           ) : null}
         </DragOverlay>
       </main>
+      {sleepReplacePrompt && (
+        <SleepReplaceToast
+          dateKey={sleepReplacePrompt.dateKey}
+          onDismiss={clearSleepReplacePrompt}
+        />
+      )}
       <AuthDialog
         open={isAuthOpen}
         onClose={() => setIsAuthOpen(false)}
@@ -1992,7 +1745,60 @@ export function RoutinePlanner() {
         authError={auth.authError}
         clearError={auth.clearError}
       />
+      <SyncConflictDialog
+        conflict={auth.syncConflict}
+        onResolve={auth.resolveConflict}
+      />
     </DndContext>
+  );
+}
+
+/**
+ * Horizontal companion to PaneResizeHandle — used between vertically
+ * stacked regions (currently the Calendar tab's todos / events split).
+ * Drag up/down with the mouse, arrow keys nudge by 8 / 32 px,
+ * double-click resets. Kept thin and visually subtle until hover.
+ */
+function RowResizeHandle({
+  label,
+  onPointerDown,
+  onKeyAdjust,
+  onReset,
+}: {
+  label: string;
+  onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  onKeyAdjust: (delta: number) => void;
+  onReset: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="group flex h-1.5 w-full shrink-0 cursor-row-resize items-center justify-center bg-transparent transition-colors hover:bg-[color:var(--sunken)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--ring)]"
+      title={`${label} — drag, double-click to reset, or use ↑ / ↓`}
+      aria-label={label}
+      onPointerDown={onPointerDown}
+      onDoubleClick={onReset}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          // Up = grow the bottom region (events take more space).
+          onKeyAdjust(event.shiftKey ? 32 : 8);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          onKeyAdjust(event.shiftKey ? -32 : -8);
+        } else if (
+          event.key === "Home" ||
+          event.key === "Enter" ||
+          event.key === " " ||
+          event.key === "Backspace"
+        ) {
+          event.preventDefault();
+          onReset();
+        }
+      }}
+    >
+      <span className="mx-12 h-px w-full rounded-full bg-[color:var(--line-soft)] transition-colors group-hover:bg-[color:var(--line-strong)]" />
+    </button>
   );
 }
 
@@ -2010,7 +1816,7 @@ function PaneResizeHandle({
   return (
     <button
       type="button"
-      className="group hidden w-2 shrink-0 cursor-col-resize items-stretch justify-center bg-zinc-50 dark:bg-zinc-950 transition-colors hover:bg-indigo-50 dark:hover:bg-indigo-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500/40 lg:flex"
+      className="group hidden w-1 shrink-0 cursor-col-resize items-stretch justify-center bg-transparent transition-colors hover:bg-[color:var(--sunken)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--ring)] lg:flex"
       title={`${label} — drag, double-click to reset, or use ← / →`}
       aria-label={label}
       onPointerDown={onPointerDown}
@@ -2033,7 +1839,7 @@ function PaneResizeHandle({
         }
       }}
     >
-      <span className="my-4 w-px rounded-full bg-zinc-200 dark:bg-zinc-700 transition-colors group-hover:bg-indigo-300" />
+      <span className="my-6 w-px rounded-full bg-transparent transition-colors group-hover:bg-[color:var(--line-strong)]" />
     </button>
   );
 }
@@ -2046,8 +1852,7 @@ type TopBarProps = {
   sunTimes: SunTimes;
   isDarkMode: boolean;
   onToggleTheme: () => void;
-  resetArmed: boolean;
-  onReset: () => void;
+  onRefresh: () => void;
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
@@ -2062,8 +1867,7 @@ function TopBar({
   sunTimes,
   isDarkMode,
   onToggleTheme,
-  resetArmed,
-  onReset,
+  onRefresh,
   onPrevious,
   onNext,
   onToday,
@@ -2101,106 +1905,81 @@ function TopBar({
   }, [isDatePickerOpen]);
 
   return (
-    <header className="flex min-h-24 shrink-0 flex-col justify-center gap-2 border-b border-zinc-200 px-6 py-3 dark:border-zinc-800">
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <div ref={datePickerRef} className="relative min-w-0">
-            <button
-              type="button"
-              className="flex max-w-[min(54vw,34rem)] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base font-semibold tracking-tight text-zinc-900 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 dark:text-zinc-100 dark:hover:bg-zinc-800"
-              aria-expanded={isDatePickerOpen}
-              aria-haspopup="dialog"
-              onClick={() => {
-                if (!isDatePickerOpen) {
-                  setPickerMonth(selectedDate);
-                }
-                setIsDatePickerOpen(!isDatePickerOpen);
+    <header className="flex shrink-0 items-center gap-3.5 border-b border-[color:var(--line-soft)] px-[18px] py-3">
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          className="inline-grid h-7 w-7 place-items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+          onClick={onPrevious}
+          aria-label="Previous"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </button>
+        <div ref={datePickerRef} className="relative min-w-0">
+          <button
+            type="button"
+            className="inline-flex max-w-[min(46vw,28rem)] items-center gap-2 whitespace-nowrap rounded-full border border-[color:var(--line)] bg-[color:var(--sunken)] px-3 py-1.5 text-[13px] font-medium tracking-[-0.005em] text-[color:var(--ink)] transition-colors hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--ring)]"
+            aria-expanded={isDatePickerOpen}
+            aria-haspopup="dialog"
+            onClick={() => {
+              if (!isDatePickerOpen) {
+                setPickerMonth(selectedDate);
+              }
+              setIsDatePickerOpen(!isDatePickerOpen);
+            }}
+          >
+            <CalendarDays className="h-3.5 w-3.5 shrink-0 text-[color:var(--ink-3)]" />
+            <span className="truncate">{title}</span>
+          </button>
+          {isDatePickerOpen && (
+            <DatePickerPopover
+              selectedDate={selectedDate}
+              visibleMonth={pickerMonth}
+              onVisibleMonthChange={setPickerMonth}
+              onSelect={(dateKey) => {
+                onSelectDate(dateKey);
+                setIsDatePickerOpen(false);
               }}
-            >
-              <CalendarDays className="h-4 w-4 shrink-0 text-indigo-500" />
-              <span className="truncate">{title}</span>
-            </button>
-            {isDatePickerOpen && (
-              <DatePickerPopover
-                selectedDate={selectedDate}
-                visibleMonth={pickerMonth}
-                onVisibleMonthChange={setPickerMonth}
-                onSelect={(dateKey) => {
-                  onSelectDate(dateKey);
-                  setIsDatePickerOpen(false);
-                }}
-              />
-            )}
-          </div>
-          <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100/70 p-0.5 dark:bg-zinc-800/60">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={onPrevious}
-              aria-label="Previous"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={onNext}
-              aria-label="Next"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
+            />
+          )}
         </div>
-        {accountSlot ? (
-          <div className="shrink-0 border-l border-zinc-200 pl-3 dark:border-zinc-800">
-            {accountSlot}
-          </div>
-        ) : null}
+        <button
+          type="button"
+          className="inline-grid h-7 w-7 place-items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+          onClick={onNext}
+          aria-label="Next"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <ViewSwitcher value={calendarView} onChange={setCalendarView} />
-          <div
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
-            title={`${sunTimes.locationLabel} sunrise ${sunTimes.sunriseLabel}, sunset ${sunTimes.sunsetLabel}. Rounded to the nearest hour from ${sunTimes.source === "open-meteo" ? "Open-Meteo" : "fallback"} data.`}
-          >
-            <Sun className="h-3.5 w-3.5 text-amber-500" />
-            <span className="tabular-nums">
-              {sunTimes.sunriseLabel} / {sunTimes.sunsetLabel}
-            </span>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={onToggleTheme}
-            aria-label={isDarkMode ? "Use light mode" : "Use dark mode"}
-            title={isDarkMode ? "Light mode" : "Dark mode"}
-          >
-            {isDarkMode ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
-            )}
-          </Button>
-          <Button
-            type="button"
-            variant={resetArmed ? "primary" : "ghost"}
-            size="sm"
-            onClick={onReset}
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            {resetArmed ? "Confirm reset" : "Reset"}
-          </Button>
-          <Button type="button" variant="primary" size="sm" onClick={onToday}>
-            Today
-          </Button>
-        </div>
+      <ViewSwitcher value={calendarView} onChange={setCalendarView} />
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onToggleTheme}
+          aria-label={isDarkMode ? "Use light mode" : "Use dark mode"}
+          title={isDarkMode ? "Light mode" : "Dark mode"}
+        >
+          {isDarkMode ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onRefresh}
+          title="Refresh data"
+          aria-label="Refresh data"
+        >
+          <RefreshCcw className="h-3.5 w-3.5" />
+        </Button>
+        <Button type="button" variant="primary" onClick={onToday}>
+          Today
+        </Button>
+        {accountSlot}
       </div>
     </header>
   );
@@ -2229,31 +2008,34 @@ function DatePickerPopover({
     <div
       role="dialog"
       aria-label="Choose display date"
-      className="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-72 rounded-xl border border-zinc-200 bg-white p-3 text-zinc-900 shadow-xl shadow-zinc-900/15 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100"
+      className="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-72 rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)] p-3 text-[color:var(--ink)] shadow-[0_24px_48px_-12px_rgba(20,18,10,0.18)]"
     >
       <div className="mb-3 flex items-center justify-between gap-2">
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="icon-sm"
+          className="inline-grid h-7 w-7 place-items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
           onClick={() => onVisibleMonthChange(addMonths(visibleMonth, -1))}
           aria-label="Previous month"
         >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <div className="text-sm font-semibold">{monthTitle}</div>
-        <Button
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </button>
+        <div className="font-[family-name:var(--font-disp)] text-[15px] font-medium tracking-[-0.01em]">
+          <em className="italic font-normal text-[color:var(--ink-2)]">
+            {monthTitle.split(" ")[0]}{" "}
+          </em>
+          {monthTitle.split(" ").slice(1).join(" ")}
+        </div>
+        <button
           type="button"
-          variant="ghost"
-          size="icon-sm"
+          className="inline-grid h-7 w-7 place-items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
           onClick={() => onVisibleMonthChange(addMonths(visibleMonth, 1))}
           aria-label="Next month"
         >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold uppercase text-zinc-400 dark:text-zinc-500">
+      <div className="grid grid-cols-7 gap-1 text-center font-[family-name:var(--font-mono)] text-[9.5px] font-medium uppercase tracking-[0.14em] text-[color:var(--ink-3)]">
         {weekdays.map((weekday) => (
           <div key={weekday} className="py-1">
             {weekday}
@@ -2271,14 +2053,15 @@ function DatePickerPopover({
               key={dateKey}
               type="button"
               className={cn(
-                "flex h-8 items-center justify-center rounded-lg text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30",
+                "flex h-8 items-center justify-center rounded-[var(--r-sm)] font-[family-name:var(--font-mono)] text-[11.5px] font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--ring)]",
                 inMonth
-                  ? "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                  : "text-zinc-300 hover:bg-zinc-50 dark:text-zinc-600 dark:hover:bg-zinc-900",
+                  ? "text-[color:var(--ink-2)] hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+                  : "text-[color:var(--ink-4)] hover:bg-[color:var(--sunken)]/60",
                 isToday &&
-                  "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200",
+                  !isSelected &&
+                  "bg-[color:var(--sunken)] text-[color:var(--ink)] ring-1 ring-inset ring-[color:var(--line)]",
                 isSelected &&
-                  "bg-indigo-600 text-white hover:bg-indigo-600 dark:bg-indigo-500 dark:text-white",
+                  "bg-[color:var(--ink)] !text-[color:var(--card)] hover:bg-[color:var(--ink)]",
               )}
               onClick={() => onSelect(dateKey)}
             >
@@ -2287,10 +2070,59 @@ function DatePickerPopover({
           );
         })}
       </div>
-      <div className="mt-3 flex justify-end">
+      <div className="mt-3 flex justify-end border-t border-[color:var(--line-soft)] pt-3">
         <Button type="button" variant="soft" size="sm" onClick={() => onSelect(today)}>
-          Today
+          Jump to today
         </Button>
+      </div>
+    </div>
+  );
+}
+
+type DayBarProps = {
+  dateKey: string;
+  sunTimes: SunTimes;
+  scheduledCount: number;
+};
+
+function DayBar({ dateKey, sunTimes, scheduledCount }: DayBarProps) {
+  const date = parseDateKey(dateKey);
+  const weekday = new Intl.DateTimeFormat("en-AU", {
+    weekday: "long",
+  }).format(date);
+  const dayMonth = new Intl.DateTimeFormat("en-AU", {
+    day: "numeric",
+    month: "long",
+  }).format(date);
+
+  return (
+    <div className="flex shrink-0 items-center gap-3.5 border-b border-[color:var(--line-soft)] bg-[color:var(--bg)] px-[18px] py-2.5">
+      <div className="font-[family-name:var(--font-disp)] text-[22px] font-medium tracking-[-0.015em] text-[color:var(--ink)]">
+        {weekday}{" "}
+        <em className="italic font-normal text-[color:var(--ink-2)]">
+          {dayMonth}
+        </em>
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 py-1 font-[family-name:var(--font-mono)] text-[10.5px] tracking-[0.04em] text-[color:var(--ink-2)]"
+          title={`${sunTimes.locationLabel} sunrise ${sunTimes.sunriseLabel}, sunset ${sunTimes.sunsetLabel}.`}
+        >
+          <Sun className="h-3 w-3 text-[oklch(72%_0.14_60)]" />
+          <span className="tabular-nums">
+            {sunTimes.sunriseLabel} — {sunTimes.sunsetLabel}
+          </span>
+        </span>
+        <span
+          aria-hidden="true"
+          className="hidden h-1 w-1 rounded-full bg-[color:var(--ink-4)] md:block"
+        />
+        <span className="hidden font-[family-name:var(--font-mono)] text-[10.5px] tracking-[0.04em] text-[color:var(--ink-3)] md:block">
+          <span className="tabular-nums text-[color:var(--ink-2)]">
+            {scheduledCount}
+          </span>{" "}
+          scheduled
+        </span>
       </div>
     </div>
   );
@@ -2306,16 +2138,16 @@ function ViewSwitcher({
   const views: CalendarView[] = ["day", "week", "month", "stats"];
 
   return (
-    <div className="flex rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 p-0.5">
+    <div className="inline-flex shrink-0 gap-0.5 rounded-[10px] border border-[color:var(--line)] bg-[color:var(--sunken)] p-[3px]">
       {views.map((view) => (
         <button
           key={view}
           type="button"
           className={cn(
-            "h-7 rounded-md px-3 text-xs font-medium capitalize text-zinc-500 dark:text-zinc-400 transition-colors",
+            "h-7 rounded-[7px] px-3.5 text-[12.5px] font-semibold capitalize tracking-[-0.005em] transition-colors",
             value === view
-              ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm"
-              : "hover:text-zinc-700 dark:hover:text-zinc-200",
+              ? "bg-[color:var(--card)] text-[color:var(--ink)] shadow-[0_1px_2px_rgba(20,18,10,0.06)]"
+              : "text-[color:var(--ink-2)] hover:text-[color:var(--ink)]",
           )}
           onClick={() => onChange(view)}
         >
@@ -2347,12 +2179,16 @@ function StatsView({
   todos,
   todoLists,
   templates,
+  sleepRecords,
+  sleepTargetMinutes,
   dataRevision,
 }: {
   selectedDate: string;
   todos: TodoItem[];
   todoLists: TodoList[];
   templates: RoutineTemplate[];
+  sleepRecords: SleepRecord[];
+  sleepTargetMinutes: number;
   dataRevision: number;
 }) {
   const initialStart = startOfWeek(selectedDate);
@@ -2371,6 +2207,31 @@ function StatsView({
     });
   }, [dataRevision, endDate, startDate, templates, todoLists, todos]);
 
+  const completion = useMemo(() => {
+    void dataRevision;
+    return buildCompletionStats({ startDate, endDate, todos, todoLists });
+  }, [dataRevision, endDate, startDate, todoLists, todos]);
+
+  const accuracy = useMemo(() => {
+    void dataRevision;
+    return buildEstimateAccuracyStats({
+      startDate,
+      endDate,
+      todos,
+      todoLists,
+    });
+  }, [dataRevision, endDate, startDate, todoLists, todos]);
+
+  const sleepStats = useMemo(() => {
+    void dataRevision;
+    return buildSleepStats({
+      startDate,
+      endDate,
+      sleepRecords,
+      sleepTargetMinutes,
+    });
+  }, [dataRevision, endDate, sleepRecords, sleepTargetMinutes, startDate]);
+
   const totalMinutes = summary.routineMinutes + summary.todoMinutes;
   const maxRoutineMinutes = Math.max(
     1,
@@ -2378,6 +2239,19 @@ function StatsView({
   );
   const maxTodoMinutes = Math.max(1, ...summary.todoRows.map((row) => row.minutes));
   const maxListMinutes = Math.max(1, ...summary.listRows.map((row) => row.minutes));
+  const maxCompletionsPerList = Math.max(
+    1,
+    ...completion.byList.map((row) => row.completed),
+  );
+  const maxCompletionsPerDay = Math.max(
+    1,
+    ...completion.daily.map((row) => row.count),
+  );
+  const onTimePercent = completion.completedWithDueCount
+    ? Math.round(
+        (completion.onTimeCount / completion.completedWithDueCount) * 100,
+      )
+    : null;
 
   const setThisWeek = () => {
     const weekStart = startOfWeek(selectedDate);
@@ -2392,14 +2266,14 @@ function StatsView({
   };
 
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-white p-6 dark:bg-zinc-900">
+    <section className="min-h-0 flex-1 overflow-y-auto bg-[color:var(--card)] p-6">
       <div className="mx-auto flex max-w-5xl flex-col gap-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <div className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            <div className="text-lg font-semibold text-[color:var(--ink)]">
               Time statistics
             </div>
-            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            <div className="mt-1 text-xs text-[color:var(--ink-2)]">
               Routine blocks are grouped by their library source. Todo blocks are grouped by their original todo item.
             </div>
           </div>
@@ -2489,6 +2363,96 @@ function StatsView({
             <StatsEmpty text="No todo list activity in this range." />
           )}
         </StatsPanel>
+
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-lg font-semibold text-[color:var(--ink)]">
+            Reminder completion
+          </div>
+          <div className="text-xs text-[color:var(--ink-2)]">
+            Based on when each reminder was checked off. &ldquo;Overdue&rdquo;
+            is range-independent — it shows reminders currently past due.
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-4">
+          <StatsMetric
+            label="Completed"
+            value={String(completion.completedCount)}
+          />
+          <StatsMetric
+            label="On-time"
+            value={onTimePercent === null ? "—" : `${onTimePercent}%`}
+          />
+          <StatsMetric
+            label="With deadline"
+            value={String(completion.completedWithDueCount)}
+          />
+          <StatsMetric
+            label="Currently overdue"
+            value={String(completion.overdueCount)}
+          />
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <StatsPanel title="By list">
+            {completion.byList.length ? (
+              completion.byList.map((row) => (
+                <StatsCountRow
+                  key={row.id}
+                  title={row.name}
+                  color={row.color}
+                  count={row.completed}
+                  maxCount={maxCompletionsPerList}
+                />
+              ))
+            ) : (
+              <StatsEmpty text="No reminders completed in this range." />
+            )}
+          </StatsPanel>
+
+          <StatsPanel title="By category">
+            <CategoryCompletionBreakdown counts={completion.byCategory} />
+          </StatsPanel>
+        </div>
+
+        <StatsPanel title="Daily completions">
+          {completion.daily.some((day) => day.count > 0) ? (
+            <CompletionDailyChart
+              days={completion.daily}
+              maxCount={maxCompletionsPerDay}
+            />
+          ) : (
+            <StatsEmpty text="No completions to plot in this range." />
+          )}
+        </StatsPanel>
+
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-lg font-semibold text-[color:var(--ink)]">
+            Estimate accuracy
+          </div>
+          <div className="text-xs text-[color:var(--ink-2)]">
+            How AI estimates compared to actual time spent on completed
+            reminders. Each dot is one task — ones above the diagonal took
+            longer than estimated.
+          </div>
+        </div>
+        <EstimateAccuracySection accuracy={accuracy} />
+
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-lg font-semibold text-[color:var(--ink)]">
+            Sleep
+          </div>
+          <div className="text-xs text-[color:var(--ink-2)]">
+            Imported from Apple Health (and any other tracker that POSTs
+            to /api/health/sleep). Bars are total minutes per the night you
+            woke up on — green = at or above target, amber = within 80%,
+            red = under.
+          </div>
+        </div>
+        <SleepStatsSection
+          summary={sleepStats}
+          sleepTargetMinutes={sleepTargetMinutes}
+        />
       </div>
     </section>
   );
@@ -2504,9 +2468,9 @@ function StatsDateField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="block text-[11px] font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+    <label className="block text-[11px] font-medium uppercase tracking-wide text-[color:var(--ink-3)]">
       {label}
-      <span className="relative mt-1 flex h-8 w-[132px] items-center rounded-md border border-zinc-200 bg-white px-2 text-left text-xs font-medium leading-none tabular-nums text-zinc-800 transition-colors focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-500/20 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+      <span className="relative mt-1 flex h-8 w-[132px] items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2 text-left text-xs font-medium leading-none tabular-nums text-[color:var(--ink)] transition-colors focus-within:border-[color:var(--line-strong)] focus-within:ring-2 focus-within:ring-[color:var(--ring)]">
         <span className="flex h-full items-center leading-none" aria-hidden="true">
           {value.replace(/-/g, "/")}
         </span>
@@ -2524,11 +2488,11 @@ function StatsDateField({
 
 function StatsMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+    <div className="rounded-[var(--r)] border border-[color:var(--line)] bg-[color:var(--sunken)]/55 p-4">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--ink-3)]">
         {label}
       </div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
+      <div className="mt-2 text-2xl font-semibold tabular-nums text-[color:var(--ink)]">
         {value}
       </div>
     </div>
@@ -2543,8 +2507,8 @@ function StatsPanel({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+    <div className="rounded-[var(--r)] border border-[color:var(--line)] bg-[color:var(--card)] p-4 shadow-[0_10px_28px_-20px_rgba(20,18,10,0.28)]">
+      <div className="mb-3 text-sm font-semibold text-[color:var(--ink)]">
         {title}
       </div>
       <div className="space-y-3">{children}</div>
@@ -2569,19 +2533,19 @@ function StatsRow({
     <div>
       <div className="mb-1 flex items-center justify-between gap-3 text-xs">
         <div className="min-w-0">
-          <div className="truncate font-medium text-zinc-800 dark:text-zinc-200">
+          <div className="truncate font-medium text-[color:var(--ink)]">
             {title}
           </div>
-          <div className="truncate text-[11px] text-zinc-400 dark:text-zinc-500">
+          <div className="truncate text-[11px] text-[color:var(--ink-3)]">
             {meta}
           </div>
         </div>
-        <div className="shrink-0 font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">
+        <div className="shrink-0 font-semibold tabular-nums text-[color:var(--ink)]">
           {formatStatsHours(minutes)}
         </div>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-        <div className="h-full rounded-full bg-indigo-500" style={{ width }} />
+      <div className="h-2 overflow-hidden rounded-full bg-[color:var(--sunken)]">
+        <div className="h-full rounded-full bg-[color:var(--ink)]" style={{ width }} />
       </div>
     </div>
   );
@@ -2589,8 +2553,698 @@ function StatsRow({
 
 function StatsEmpty({ text }: { text: string }) {
   return (
-    <div className="rounded-md border border-dashed border-zinc-200 px-3 py-5 text-center text-xs text-zinc-400 dark:border-zinc-800 dark:text-zinc-500">
+    <div className="rounded-[var(--r-sm)] border border-dashed border-[color:var(--line)] bg-[color:var(--sunken)]/35 px-3 py-5 text-center text-xs text-[color:var(--ink-3)]">
       {text}
+    </div>
+  );
+}
+
+const TIME_RANGE_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/**
+ * Returns a friendly day label relative to today: "Today" / "Tomorrow" /
+ * "Wed" within the next week / "Mon, May 30" further out. Keeps the
+ * pinned events list compact while still placing each event in time.
+ */
+function relativeDayLabel(date: Date, todayDateKey: string): string {
+  const dateKey = formatDateKey(date);
+  if (dateKey === todayDateKey) return "Today";
+  // addDays returns a key string for "today + N".
+  if (dateKey === addDays(todayDateKey, 1)) return "Tomorrow";
+  const today = parseDateKey(todayDateKey);
+  const diffDays = Math.round(
+    (date.getTime() - today.getTime()) / (24 * 60 * 60 * 1000),
+  );
+  if (diffDays > 0 && diffDays < 7) {
+    return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date);
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
+/**
+ * Pinned bottom region inside the Calendar rail tab: a short glance of
+ * what's coming up across all upcoming days. Fixed max-height with its
+ * own scroll so it can't overflow the rail.
+ */
+function CalendarTabUpcomingEvents({
+  events,
+  todoLists,
+  todayDateKey,
+  heightPx,
+  onManage,
+}: {
+  events: EventItem[];
+  todoLists: TodoList[];
+  todayDateKey: string;
+  heightPx: number;
+  onManage: () => void;
+}) {
+  return (
+    <div
+      className="flex shrink-0 flex-col bg-[color:var(--card)] px-3.5 pb-3 pt-2"
+      style={{ height: heightPx }}
+    >
+      <div className="mb-1 flex items-center justify-between">
+        <div className="font-[family-name:var(--font-mono)] text-[10.5px] font-medium uppercase tracking-[0.14em] text-[color:var(--ink-3)]">
+          Upcoming events
+        </div>
+        <button
+          type="button"
+          onClick={onManage}
+          className="rounded p-1 text-[color:var(--ink-3)] hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+          title="Manage events"
+          aria-label="Manage events"
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+      </div>
+      {events.length === 0 ? (
+        <div className="rounded-[var(--r-sm)] border border-dashed border-[color:var(--line)] bg-[color:var(--sunken)]/35 px-3 py-2.5 text-center text-[11px] text-[color:var(--ink-3)]">
+          Nothing scheduled.
+        </div>
+      ) : (
+        // Fills the user-controlled region height; internal scroll handles
+        // overflow when there are more events than fit.
+        <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5 [scrollbar-color:var(--line)_transparent]">
+          {events.map((event) => {
+            const list = todoLists.find((l) => l.id === event.list_id);
+            const listStyles = list
+              ? todoListColorTokens(list.color)
+              : null;
+            const start = new Date(event.starts_at);
+            const end = new Date(
+              start.getTime() + event.duration_minutes * 60_000,
+            );
+            const timeRange = `${TIME_RANGE_FMT.format(start)} – ${TIME_RANGE_FMT.format(end)}`;
+            const dayLabel = relativeDayLabel(start, todayDateKey);
+            // Reuse the deadline-urgency scale on the day label so the
+            // closest events visually pop. <1h = rose, <4h = orange, today
+            // = amber, ≤3d = yellow.
+            const urgency = eventUrgencyTokens(event);
+            return (
+              <li
+                key={event.id}
+                className="flex items-center gap-2 rounded-[10px] border border-transparent p-1.5 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)]"
+              >
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--r-sm)] bg-[color:var(--block-event)] text-[color:var(--block-event-ink)]"
+                  aria-hidden
+                >
+                  {(() => {
+                    const Icon =
+                      EVENT_TYPE_ICONS[event.event_type] ?? Clock;
+                    return <Icon className="h-3 w-3" />;
+                  })()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12.5px] font-semibold leading-[1.2] text-[color:var(--ink)]">
+                    {event.title}
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap font-[family-name:var(--font-mono)] text-[10px] text-[color:var(--ink-3)]">
+                    <span
+                      className={cn(
+                        "rounded px-1 py-0.5",
+                        urgency?.pill ?? "text-[color:var(--ink-3)]",
+                      )}
+                    >
+                      {dayLabel}
+                    </span>
+                    <span className="truncate">{timeRange}</span>
+                    {list && listStyles && (
+                      <span
+                        className={cn(
+                          "inline-flex h-3.5 shrink-0 items-center truncate rounded border px-1 text-[9px] font-medium",
+                          listStyles.block,
+                          listStyles.text,
+                        )}
+                      >
+                        {list.name}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Floating warning shown after the user drops a Sleep template on a day that
+ * already has one. A second drop on the same day within the prompt window
+ * replaces the existing block; otherwise the prompt times out and disappears.
+ */
+function SleepReplaceToast({
+  dateKey,
+  onDismiss,
+}: {
+  dateKey: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed bottom-5 left-1/2 z-50 flex max-w-md -translate-x-1/2 items-start gap-3 rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)] px-4 py-3 text-[13px] text-[color:var(--ink)] shadow-[0_18px_44px_-22px_rgba(20,18,10,0.45)]"
+    >
+      <Moon className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--ink-2)]" />
+      <div className="min-w-0">
+        <div className="font-medium">
+          Sleep already scheduled on {formatDayLabel(dateKey)}
+        </div>
+        <div className="mt-0.5 text-[12px] text-[color:var(--ink-2)]">
+          Drop again within 5s to replace it.
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        className="ml-1 -mr-1 -mt-1 rounded p-1 text-[color:var(--ink-3)] hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Count-based variant of StatsRow used by the reminder-completion panels —
+ * shows an integer count with a colored bar tinted by the list's palette.
+ */
+function StatsCountRow({
+  title,
+  color,
+  count,
+  maxCount,
+}: {
+  title: string;
+  color: TodoListColor;
+  count: number;
+  maxCount: number;
+}) {
+  const width = `${Math.max(4, Math.round((count / maxCount) * 100))}%`;
+  const styles = todoListColorTokens(color);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={cn("h-2 w-2 shrink-0 rounded-full", styles.accent)} />
+          <span className="truncate font-medium text-[color:var(--ink)]">
+            {title}
+          </span>
+        </div>
+        <div className="shrink-0 font-semibold tabular-nums text-[color:var(--ink)]">
+          {count}
+        </div>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-[color:var(--sunken)]">
+        <div
+          className={cn("h-full rounded-full", styles.accent)}
+          style={{ width }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CategoryCompletionBreakdown({
+  counts,
+}: {
+  counts: Record<Category, number>;
+}) {
+  const total = counts.T0 + counts.T1 + counts.T2;
+  if (!total) {
+    return <StatsEmpty text="No reminders completed in this range." />;
+  }
+  const order: Category[] = ["T0", "T1", "T2"];
+  const labels: Record<Category, string> = {
+    T0: "T0 · critical",
+    T1: "T1 · important",
+    T2: "T2 · everything else",
+  };
+  return (
+    <div className="space-y-3">
+      {order.map((cat) => {
+        const count = counts[cat];
+        const pct = total ? Math.round((count / total) * 100) : 0;
+        const width = `${Math.max(4, pct)}%`;
+        const tokens = categoryTokens(cat);
+        return (
+          <div key={cat}>
+            <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className={cn(
+                    "inline-flex h-5 min-w-[28px] items-center justify-center rounded-md px-1.5 font-[family-name:var(--font-mono)] text-[10px] font-medium",
+                    tokens.chip,
+                  )}
+                >
+                  {cat}
+                </span>
+                <span className="truncate text-[color:var(--ink-2)]">
+                  {labels[cat]}
+                </span>
+              </div>
+              <div className="shrink-0 font-semibold tabular-nums text-[color:var(--ink)]">
+                {count}
+                <span className="ml-1 text-[10.5px] font-medium text-[color:var(--ink-3)]">
+                  {pct}%
+                </span>
+              </div>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-[color:var(--sunken)]">
+              <div
+                className="h-full rounded-full bg-[color:var(--ink)]"
+                style={{ width: count ? width : "0%" }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Sleep trend chart + summary metrics. Each bar represents one day in
+ * range; height is total sleep minutes for the night that ended that
+ * morning. Color encodes target proximity so a glance at the chart shows
+ * weeks of "on target" vs "under" without reading numbers.
+ */
+function SleepStatsSection({
+  summary,
+  sleepTargetMinutes,
+}: {
+  summary: import("@/components/planner/types").SleepStatsSummary;
+  sleepTargetMinutes: number;
+}) {
+  if (!summary.daysWithData) {
+    return (
+      <StatsPanel title="Trend">
+        <StatsEmpty text="No sleep data in this range yet. Connect Health Auto Export in Settings to start syncing." />
+      </StatsPanel>
+    );
+  }
+  // Anchor the y-axis at max(largest day, 9h target+15%) so the target
+  // line sits comfortably inside the chart even on light-sleep weeks.
+  const referenceMax = Math.max(
+    sleepTargetMinutes,
+    ...summary.daily.map((row) => row.minutes),
+  );
+  const chartMaxMinutes = Math.max(60, Math.ceil(referenceMax * 1.05));
+  const targetPct = (sleepTargetMinutes / chartMaxMinutes) * 100;
+  const labelStride =
+    summary.daily.length > 28 ? 7 : summary.daily.length > 14 ? 3 : 1;
+  const formatHrs = (minutes: number | null) => {
+    if (minutes === null || minutes === 0) return "—";
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return `${h}h ${m.toString().padStart(2, "0")}m`;
+  };
+
+  return (
+    <>
+      <div className="grid gap-3 md:grid-cols-3">
+        <StatsMetric label="Average" value={formatHrs(summary.averageMinutes)} />
+        <StatsMetric label="Median" value={formatHrs(summary.medianMinutes)} />
+        <StatsMetric
+          label="Below target"
+          value={`${summary.daysBelowTargetCount} / ${summary.daysWithData}`}
+        />
+      </div>
+      <StatsPanel title="Trend">
+        <div>
+          <div className="relative flex h-32 items-end gap-1">
+            {/* Target line — dashed horizontal across the chart so each bar
+                can be compared to it without staring at numbers. */}
+            <div
+              className="pointer-events-none absolute inset-x-0 border-t border-dashed border-[color:var(--ink-3)]/55"
+              style={{ bottom: `${targetPct}%` }}
+              aria-hidden="true"
+            />
+            {summary.daily.map((day) => {
+              const heightPct = day.minutes
+                ? Math.max(
+                    6,
+                    Math.round((day.minutes / chartMaxMinutes) * 100),
+                  )
+                : 0;
+              const fillColor = !day.minutes
+                ? "bg-[color:var(--sunken)]"
+                : day.minutes >= sleepTargetMinutes
+                ? "bg-emerald-500/85"
+                : day.minutes >= sleepTargetMinutes * 0.8
+                ? "bg-amber-400/85"
+                : "bg-rose-400/85";
+              return (
+                <div
+                  key={day.dateKey}
+                  className="flex flex-1 flex-col items-center justify-end"
+                  title={`${day.dateKey} · ${formatHrs(day.minutes)}${
+                    day.minutes < sleepTargetMinutes && day.minutes > 0
+                      ? ` · ${formatHrs(
+                          sleepTargetMinutes - day.minutes,
+                        )} below target`
+                      : ""
+                  }`}
+                >
+                  <div
+                    className={cn("w-full rounded-sm", fillColor)}
+                    style={{
+                      height: `${heightPct}%`,
+                      minHeight: day.minutes ? 2 : 0,
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex gap-1 text-[10px] font-[family-name:var(--font-mono)] text-[color:var(--ink-3)]">
+            {summary.daily.map((day, index) => (
+              <div key={day.dateKey} className="flex-1 text-center">
+                {index % labelStride === 0 ? day.dateKey.slice(-5) : ""}
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-[11px] text-[color:var(--ink-3)]">
+            Target: {formatHrs(sleepTargetMinutes)} · dashed line marks the
+            target threshold.
+          </div>
+        </div>
+      </StatsPanel>
+    </>
+  );
+}
+
+function CompletionDailyChart({
+  days,
+  maxCount,
+}: {
+  days: { dateKey: string; count: number }[];
+  maxCount: number;
+}) {
+  // Show day-of-month labels only every Nth column to avoid crowding on long
+  // ranges. Sparse labels still let users orient on month/week boundaries.
+  const labelStride = days.length > 28 ? 7 : days.length > 14 ? 3 : 1;
+  return (
+    <div>
+      <div className="flex h-32 items-end gap-1">
+        {days.map((day) => {
+          const heightPct = day.count
+            ? Math.max(6, Math.round((day.count / maxCount) * 100))
+            : 0;
+          return (
+            <div
+              key={day.dateKey}
+              className="flex flex-1 flex-col items-center justify-end"
+              title={`${day.dateKey} · ${day.count} completed`}
+            >
+              <div
+                className={cn(
+                  "w-full rounded-sm",
+                  day.count
+                    ? "bg-[color:var(--ink)]"
+                    : "bg-[color:var(--sunken)]",
+                )}
+                style={{ height: `${heightPct}%`, minHeight: day.count ? 2 : 0 }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex gap-1 text-[10px] font-[family-name:var(--font-mono)] text-[color:var(--ink-3)]">
+        {days.map((day, index) => (
+          <div key={day.dateKey} className="flex-1 text-center">
+            {index % labelStride === 0 ? day.dateKey.slice(-5) : ""}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Composite for the "Estimate accuracy" section: 4 metric tiles + calibration
+ * scatter + per-list breakdown. Renders an empty state when no completed
+ * todos in range have both an estimate snapshot and an actual.
+ */
+function EstimateAccuracySection({
+  accuracy,
+}: {
+  accuracy: import("@/components/planner/types").StatsEstimateAccuracySummary;
+}) {
+  if (!accuracy.points.length) {
+    return (
+      <StatsPanel title="Calibration">
+        <StatsEmpty text="No completed reminders with an estimate yet in this range. Estimate a task, then complete it to start tracking accuracy." />
+      </StatsPanel>
+    );
+  }
+
+  const samples = accuracy.points.length;
+  const medianRatioLabel =
+    accuracy.medianRatio != null ? `${accuracy.medianRatio.toFixed(2)}×` : "—";
+  const mapeLabel =
+    accuracy.mapePct != null ? `${Math.round(accuracy.mapePct)}%` : "—";
+  const biasLabel = accuracy.meanSignedErrorMinutes != null
+    ? `${accuracy.meanSignedErrorMinutes >= 0 ? "+" : ""}${Math.round(accuracy.meanSignedErrorMinutes)}m`
+    : "—";
+  const coverageLabel = accuracy.rangeCoverage
+    ? `${accuracy.rangeCoverage.withinRange} / ${accuracy.rangeCoverage.withRange}`
+    : "—";
+
+  const maxRatioForList = Math.max(
+    1,
+    ...accuracy.byList.map((row) => row.medianRatio),
+  );
+
+  return (
+    <>
+      <div className="grid gap-3 md:grid-cols-4">
+        <StatsMetric
+          label={`Samples (${samples})`}
+          value={medianRatioLabel}
+        />
+        <StatsMetric label="MAPE" value={mapeLabel} />
+        <StatsMetric label="Bias (avg)" value={biasLabel} />
+        <StatsMetric label="In P25-P90" value={coverageLabel} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <StatsPanel title="Calibration (estimated vs actual)">
+          <CalibrationScatter points={accuracy.points} />
+          <p className="mt-2 text-[11px] text-[color:var(--ink-3)]">
+            Dots above the dashed diagonal took longer than estimated; below =
+            finished faster. Closer to the line is more accurate.
+          </p>
+        </StatsPanel>
+
+        <StatsPanel title="By list">
+          {accuracy.byList.length ? (
+            accuracy.byList.map((row) => (
+              <StatsRatioRow
+                key={row.id}
+                title={row.name}
+                color={row.color}
+                ratio={row.medianRatio}
+                samples={row.samples}
+                maxRatio={maxRatioForList}
+              />
+            ))
+          ) : (
+            <StatsEmpty text="No per-list breakdown yet." />
+          )}
+        </StatsPanel>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Minimal SVG scatter — one circle per (estimated, actual) point with a
+ * dashed identity line for reference. The axis range is chosen to fit the
+ * largest of the two minute values across all points; perfectly-on-line
+ * estimates land on the diagonal.
+ */
+function CalibrationScatter({
+  points,
+}: {
+  points: import("@/components/planner/types").StatsAccuracyPoint[];
+}) {
+  const maxMin = Math.max(
+    60,
+    ...points.flatMap((p) => [p.estimatedMinutes, p.actualMinutes]),
+  );
+  // Round up to a nice axis bound so labels look clean.
+  const niceMax = (() => {
+    if (maxMin <= 60) return 60;
+    if (maxMin <= 120) return 120;
+    if (maxMin <= 240) return 240;
+    if (maxMin <= 480) return 480;
+    if (maxMin <= 960) return 960;
+    return Math.ceil(maxMin / 480) * 480;
+  })();
+
+  const size = 280;
+  const pad = 32;
+  const inner = size - 2 * pad;
+  const scale = (m: number) => pad + (m / niceMax) * inner;
+
+  // 3 axis ticks: 0, mid, max.
+  const ticks = [0, niceMax / 2, niceMax];
+  const fmt = (m: number) => (m >= 60 ? `${(m / 60).toFixed(m % 60 ? 1 : 0)}h` : `${m}m`);
+
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} className="h-72 w-full" role="img">
+      {/* axes */}
+      <line
+        x1={pad}
+        y1={size - pad}
+        x2={size - pad}
+        y2={size - pad}
+        stroke="currentColor"
+        opacity={0.25}
+      />
+      <line
+        x1={pad}
+        y1={pad}
+        x2={pad}
+        y2={size - pad}
+        stroke="currentColor"
+        opacity={0.25}
+      />
+      {/* diagonal: perfect estimate */}
+      <line
+        x1={pad}
+        y1={size - pad}
+        x2={size - pad}
+        y2={pad}
+        stroke="currentColor"
+        strokeDasharray="4 4"
+        opacity={0.35}
+      />
+      {/* tick labels */}
+      {ticks.map((t) => (
+        <g key={t}>
+          <text
+            x={scale(t)}
+            y={size - pad + 14}
+            fontSize="9"
+            textAnchor="middle"
+            fill="currentColor"
+            opacity={0.55}
+          >
+            {fmt(t)}
+          </text>
+          <text
+            x={pad - 6}
+            y={size - scale(t) + 3}
+            fontSize="9"
+            textAnchor="end"
+            fill="currentColor"
+            opacity={0.55}
+          >
+            {fmt(t)}
+          </text>
+        </g>
+      ))}
+      {/* axis titles */}
+      <text
+        x={size / 2}
+        y={size - 4}
+        fontSize="10"
+        textAnchor="middle"
+        fill="currentColor"
+        opacity={0.6}
+      >
+        estimated
+      </text>
+      <text
+        x={10}
+        y={size / 2}
+        fontSize="10"
+        textAnchor="middle"
+        fill="currentColor"
+        opacity={0.6}
+        transform={`rotate(-90 10 ${size / 2})`}
+      >
+        actual
+      </text>
+      {/* data points */}
+      {points.map((p) => (
+        <circle
+          key={p.id}
+          cx={scale(Math.min(p.estimatedMinutes, niceMax))}
+          cy={size - scale(Math.min(p.actualMinutes, niceMax))}
+          r={4}
+          fill="currentColor"
+          opacity={0.65}
+        >
+          <title>{`${p.title} · est ${fmt(p.estimatedMinutes)} → actual ${fmt(p.actualMinutes)} (${p.ratio.toFixed(2)}×)`}</title>
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
+/**
+ * Per-list ratio row: a horizontal bar where 1× = perfect (center marker),
+ * bars extending right mean the user overshot on that list. Color reflects
+ * the list's palette.
+ */
+function StatsRatioRow({
+  title,
+  color,
+  ratio,
+  samples,
+  maxRatio,
+}: {
+  title: string;
+  color: TodoListColor;
+  ratio: number;
+  samples: number;
+  maxRatio: number;
+}) {
+  const widthPct = Math.max(4, Math.round((ratio / Math.max(1, maxRatio)) * 100));
+  const styles = todoListColorTokens(color);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={cn("h-2 w-2 shrink-0 rounded-full", styles.accent)} />
+          <span className="truncate font-medium text-[color:var(--ink)]">
+            {title}
+          </span>
+        </div>
+        <div className="shrink-0 font-semibold tabular-nums text-[color:var(--ink)]">
+          {ratio.toFixed(2)}×{" "}
+          <span className="ml-1 font-[family-name:var(--font-mono)] text-[10px] font-medium text-[color:var(--ink-3)]">
+            n={samples}
+          </span>
+        </div>
+      </div>
+      <div className="relative h-2 overflow-hidden rounded-full bg-[color:var(--sunken)]">
+        <div
+          className={cn("h-full rounded-full", styles.accent)}
+          style={{ width: `${widthPct}%` }}
+        />
+        {/* "perfect estimate" marker at 1× position */}
+        <div
+          className="absolute top-0 h-2 w-px bg-[color:var(--ink)] opacity-50"
+          style={{ left: `${Math.round((1 / Math.max(1, maxRatio)) * 100)}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -2600,6 +3254,7 @@ type LeftRailProps = {
   todoTasks: TodoWithMeta[];
   todoLists: TodoList[];
   selectedDate: string;
+  autoHideCompletedDays: number | null;
   addInboxTask: (
     title?: string,
     category?: Category,
@@ -2612,97 +3267,28 @@ type LeftRailProps = {
   deleteReminder: (taskId: string) => void;
   upsertTodoList: (list: TodoList) => void;
   deleteTodoList: (listId: string) => void;
-  importCalendarText: (text: string) => void;
-  calendarImportMessage: string;
-  setCalendarImportMessage: (message: string) => void;
   periods: Period[];
   upsertPeriod: (period: Period) => void;
   deletePeriod: (periodId: string) => void;
+  events: EventItem[];
+  upsertEvent: (event: EventItem) => void;
+  deleteEvent: (eventId: string) => void;
 };
-
-function parseTags(value: string) {
-  return value
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
-function listNameKey(value: string) {
-  return value.trim().toLocaleLowerCase();
-}
-
-function colorForImportedList(name: string) {
-  const total = Array.from(name).reduce(
-    (sum, char) => sum + char.charCodeAt(0),
-    0,
-  );
-  return TODO_LIST_COLORS[total % TODO_LIST_COLORS.length];
-}
-
-function formatTodoDue(todo: TodoItem) {
-  if (!todo.due_date && !todo.due_time) return null;
-  const date = todo.due_date
-    ? new Intl.DateTimeFormat("en-AU", {
-        month: "short",
-        day: "numeric",
-      }).format(parseDateKey(todo.due_date))
-    : "Any day";
-  return todo.due_time ? `${date} ${todo.due_time}` : date;
-}
-
-function todoHoverTitle(task: TodoWithMeta) {
-  const lines = [
-    task.title,
-    `${task.category} · ${task.list.name}`,
-    `Status: ${task.status === "completed" ? "completed" : "pending"}`,
-  ];
-  const due = formatTodoDue(task);
-  if (due) lines.push(`Deadline: ${due}`);
-  if (task.allocatedMinutes > 0) {
-    lines.push(`Allocated: ${formatDuration(task.allocatedMinutes)}`);
-  }
-  if (task.tags.length > 0) lines.push(`Tags: ${task.tags.join(", ")}`);
-  return lines.join("\n");
-}
-
-function deadlineHoverTitle(marker: DeadlineMarker) {
-  return [
-    marker.title,
-    `${marker.category} · deadline`,
-    `Time: ${marker.timeLabel}${marker.hasExplicitTime ? "" : " (no time set)"}`,
-  ].join("\n");
-}
-
-function monthTaskHoverTitle(task: VisibleTask) {
-  const lines = [
-    task.title,
-    `${task.category} · ${task.kind}`,
-    `Time: ${formatTimeFromMinutes(task.topMinutes)} - ${formatTimeFromMinutes(
-      task.topMinutes + task.visibleDurationMinutes,
-    )}`,
-    `Duration: ${formatDuration(task.duration_minutes)}`,
-  ];
-  if (task.displayListName) lines.push(`List: ${task.displayListName}`);
-  if (task.status === "completed") lines.push("Status: completed");
-  if (task.continuesBefore || task.continuesAfter) {
-    lines.push("Continues across day boundary");
-  }
-  return lines.join("\n");
-}
 
 function LeftRail({
   inboxTasks,
   todoTasks,
   todoLists,
   selectedDate,
+  autoHideCompletedDays,
   addInboxTask,
   updateReminder,
   deleteReminder,
   upsertTodoList,
   deleteTodoList,
-  importCalendarText,
-  calendarImportMessage,
-  setCalendarImportMessage,
+  events,
+  upsertEvent,
+  deleteEvent,
   periods,
   upsertPeriod,
   deletePeriod,
@@ -2714,10 +3300,141 @@ function LeftRail({
   const [dueTime, setDueTime] = useState("");
   const [tags, setTags] = useState("");
   const [listId, setListId] = useState("list-inbox");
-  const [isAddingList, setIsAddingList] = useState(false);
-  const [newListName, setNewListName] = useState("");
-  const [newListColor, setNewListColor] = useState<TodoListColor>("emerald");
   const [activeView, setActiveView] = useState<LeftRailView>("calendar");
+  const [collapsedTodoListIds, setCollapsedTodoListIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [sortCalendarTodosByDueDate, setSortCalendarTodosByDueDate] =
+    useState(loadSavedCalendarTodoSort);
+  // Manual "Hide done" toggle on the Reminders tab. Persisted so the user
+  // doesn't have to re-toggle each reload. Independent from the
+  // auto_hide_completed_days preference — when EITHER is active, completed
+  // items get filtered.
+  const [hideDoneReminders, setHideDoneReminders] = useState(
+    loadSavedHideDoneReminders,
+  );
+  // Height in pixels of the pinned upcoming-events region in the Calendar
+  // tab. User-resizable via the drag handle that separates the todos area
+  // (above) from the events area (below). Persisted to localStorage.
+  const [calendarEventsHeight, setCalendarEventsHeight] = useState(
+    loadCalendarEventsHeight,
+  );
+
+  const beginCalendarSplitResize = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = calendarEventsHeight;
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+
+      const handlePointerMove = (pointerEvent: PointerEvent) => {
+        // Drag UP = grow the bottom region; drag DOWN = shrink it.
+        const next = clampCalendarEventsHeight(
+          startHeight - (pointerEvent.clientY - startY),
+        );
+        setCalendarEventsHeight(next);
+      };
+      const stop = () => {
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        setCalendarEventsHeight((current) => {
+          saveCalendarEventsHeight(current);
+          return current;
+        });
+      };
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    },
+    [calendarEventsHeight],
+  );
+
+  const adjustCalendarSplit = useCallback((delta: number) => {
+    setCalendarEventsHeight((current) => {
+      const next = clampCalendarEventsHeight(current + delta);
+      saveCalendarEventsHeight(next);
+      return next;
+    });
+  }, []);
+
+  const resetCalendarSplit = useCallback(() => {
+    setCalendarEventsHeight(() => {
+      saveCalendarEventsHeight(CALENDAR_EVENTS_HEIGHT_DEFAULT);
+      return CALENDAR_EVENTS_HEIGHT_DEFAULT;
+    });
+  }, []);
+
+  const toggleCalendarTodoSort = useCallback(() => {
+    setSortCalendarTodosByDueDate((current) => {
+      const next = !current;
+      saveCalendarTodoSort(next);
+      return next;
+    });
+  }, []);
+
+  const toggleHideDoneReminders = useCallback(() => {
+    setHideDoneReminders((current) => {
+      const next = !current;
+      saveHideDoneReminders(next);
+      return next;
+    });
+  }, []);
+
+  // Anchor "now" in state so the auto-hide filter is deterministic across
+  // re-renders (Date.now() inside useMemo would violate React's purity rule
+  // and make memo cache unreliable). We refresh the anchor whenever a todo
+  // mutation might affect the result, plus once per minute to catch the
+  // day rolling over in a tab that's been open for a while.
+  const [nowEpochMs, setNowEpochMs] = useState<number | null>(null);
+  useEffect(() => {
+    // Canonical "hydrate Date.now() on mount" pattern — same shape as the
+    // theme/storage hydration effects in this file.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setNowEpochMs(Date.now());
+    if (autoHideCompletedDays === null) return;
+    const interval = window.setInterval(() => setNowEpochMs(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, [autoHideCompletedDays, todoTasks]);
+
+  // Filter completed todos out of the reminders view when either:
+  //   - the user toggled "Hide done" on, OR
+  //   - the auto-hide-after-N-days preference matches a completion stamp.
+  // `pending` todos always pass through.
+  const visibleTodoTasks = useMemo(() => {
+    const autoCutoffMs =
+      autoHideCompletedDays === null || nowEpochMs === null
+        ? null
+        : nowEpochMs - autoHideCompletedDays * 24 * 60 * 60 * 1000;
+
+    return todoTasks.filter((task) => {
+      if (task.status !== "completed") return true;
+      if (hideDoneReminders) return false;
+      if (autoCutoffMs === null) return true;
+      const completedAt = task.completed_at
+        ? Date.parse(task.completed_at)
+        : NaN;
+      if (Number.isNaN(completedAt)) return true; // legacy todos with no stamp stay visible
+      return completedAt > autoCutoffMs;
+    });
+  }, [todoTasks, hideDoneReminders, autoHideCompletedDays, nowEpochMs]);
+
+  const toggleTodoListCollapse = useCallback((listId: string) => {
+    setCollapsedTodoListIds((current) => {
+      const next = new Set(current);
+      if (next.has(listId)) {
+        next.delete(listId);
+      } else {
+        next.add(listId);
+      }
+      return next;
+    });
+  }, []);
 
   const submitReminder = () => {
     addInboxTask(
@@ -2743,6 +3460,8 @@ function LeftRail({
         todoLists.map((list) => [listNameKey(list.name), list]),
       );
 
+      // Ensure any new list names referenced by the parser exist before we
+      // start creating tasks/events that point at them.
       for (const item of items) {
         const key = listNameKey(item.listName);
         if (listByName.has(key)) continue;
@@ -2755,23 +3474,78 @@ function LeftRail({
         upsertTodoList(list);
       }
 
+      // Reverse so the order in the UI matches the order in the input (the
+      // addInboxTask call prepends to the list).
       for (const item of [...items].reverse()) {
         const list =
           listByName.get(listNameKey(item.listName)) ??
           listByName.get("inbox") ??
           todoLists[0];
+        const listId = list?.id ?? "list-inbox";
+
+        if (item.kind === "event" && item.dueDate && item.dueTime) {
+          // The classifier said this is a fixed-time happening; build an
+          // Event and skip the todo path entirely. The "&& dueDate && dueTime"
+          // guard mirrors the server normalizer so we never end up with a
+          // timeless event.
+          const startsAt = new Date(
+            `${item.dueDate}T${item.dueTime}:00`,
+          ).toISOString();
+          upsertEvent(
+            createEvent({
+              title: item.title,
+              category: item.category,
+              list_id: listId,
+              starts_at: startsAt,
+              duration_minutes: item.durationMinutes ?? 60,
+              duration_uncertain: item.durationUncertain,
+              tags: item.tags,
+            }),
+          );
+          continue;
+        }
+
         addInboxTask(
           item.title,
           item.category,
           item.dueDate,
           item.dueTime,
           item.tags,
-          list?.id ?? "list-inbox",
+          listId,
         );
       }
     },
-    [addInboxTask, todoLists, upsertTodoList],
+    [addInboxTask, todoLists, upsertEvent, upsertTodoList],
   );
+
+  const calendarInboxTasks = useMemo(
+    () =>
+      sortCalendarTodosByDueDate
+        ? [...inboxTasks].sort(compareTodosByDueDate)
+        : inboxTasks,
+    [inboxTasks, sortCalendarTodosByDueDate],
+  );
+
+  // Upcoming events — pinned to the bottom of the Calendar rail tab so
+  // the user always sees what's coming without scrolling past the day's
+  // todos. "Upcoming" = scheduled, not yet ended, sorted by start time.
+  // Cap at MAX_UPCOMING so the bottom region stays a fixed-height glance;
+  // the Events tab is for the full list.
+  const MAX_UPCOMING = 8;
+  const todayDateKey = todayKey();
+  const upcomingEvents = useMemo(() => {
+    if (nowEpochMs === null) return [];
+    return events
+      .filter((event) => event.status !== "cancelled")
+      .filter((event) => {
+        const start = new Date(event.starts_at);
+        if (Number.isNaN(start.getTime())) return false;
+        const end = start.getTime() + event.duration_minutes * 60_000;
+        return end >= nowEpochMs;
+      })
+      .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+      .slice(0, MAX_UPCOMING);
+  }, [events, nowEpochMs]);
 
   const reminderComposer = isAdding ? (
     <ReminderEditor
@@ -2795,7 +3569,7 @@ function LeftRail({
   ) : (
     <button
       type="button"
-      className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 px-3 py-2.5 text-xs font-medium text-zinc-500 dark:text-zinc-400 transition-colors hover:border-zinc-400 dark:hover:border-zinc-500 hover:bg-white dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200"
+      className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-dashed border-[color:var(--line)] bg-[color:var(--card)] px-3 py-2.5 text-[13px] font-medium text-[color:var(--ink-2)] transition-colors hover:border-[color:var(--line-strong)] hover:bg-[color:var(--hover)] hover:text-[color:var(--ink)]"
       onClick={() => setIsAdding(true)}
     >
       <CirclePlus className="h-3.5 w-3.5" />
@@ -2806,15 +3580,17 @@ function LeftRail({
   const renderReminderList = (
     tasks: TodoWithMeta[],
     emptyText: string,
-    showScheduleState: boolean,
     showComposer: boolean,
+    sortByDueDate = false,
   ) => (
-    <div className="mt-3 space-y-2 overflow-visible pb-4">
+    <div className="space-y-2 overflow-visible pb-4">
       {showComposer && reminderComposer}
       <TodoListGroups
         tasks={tasks}
         todoLists={todoLists}
-        showScheduleState={showScheduleState}
+        sortByDueDate={sortByDueDate}
+        collapsedListIds={collapsedTodoListIds}
+        onToggleListCollapse={toggleTodoListCollapse}
         updateReminder={updateReminder}
         deleteReminder={deleteReminder}
       />
@@ -2823,78 +3599,154 @@ function LeftRail({
   );
 
   return (
-    <aside className="flex h-full w-full min-h-0 flex-col overflow-y-auto border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/60 px-5 py-5">
-      <nav className="space-y-0.5">
-        <NavItem
+    <aside className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-[color:var(--card)]">
+      <BrandHeader />
+      {/* Horizontal segmented tab bar. Four equal-width buttons, icon on
+          top + tiny label below, so the rail can stay narrow without
+          eating a whole vertical column for nav. Active = inverted ink. */}
+      <nav
+        className="mx-2 mb-1.5 mt-2.5 flex shrink-0 gap-0.5 rounded-[var(--r)] border border-[color:var(--line-soft)] bg-[color:var(--sunken)] p-1"
+        role="tablist"
+      >
+        <RailTab
           active={activeView === "calendar"}
-          icon={<CalendarDays className="h-4 w-4" />}
+          icon={<CalendarDays className="h-3.5 w-3.5" />}
           label="Calendar"
+          count={inboxTasks.length}
           onClick={() => setActiveView("calendar")}
         />
-        <NavItem
+        <RailTab
           active={activeView === "reminders"}
-          icon={<CheckSquare className="h-4 w-4" />}
+          icon={<CheckSquare className="h-3.5 w-3.5" />}
           label="Reminders"
+          count={todoTasks.length}
           onClick={() => setActiveView("reminders")}
         />
-        <NavItem
+        <RailTab
+          active={activeView === "events"}
+          icon={<Clock className="h-3.5 w-3.5" />}
+          label="Events"
+          count={events.filter((e) => e.status === "scheduled").length}
+          onClick={() => setActiveView("events")}
+        />
+        <RailTab
           active={activeView === "periods"}
-          icon={<CalendarRange className="h-4 w-4" />}
+          icon={<CalendarRange className="h-3.5 w-3.5" />}
           label="Periods"
+          count={periods.length}
           onClick={() => setActiveView("periods")}
+        />
+        <RailTab
+          active={activeView === "agent"}
+          icon={<Sparkles className="h-3.5 w-3.5" />}
+          label="Agent"
+          onClick={() => setActiveView("agent")}
         />
       </nav>
 
       {activeView === "calendar" && (
-        <>
-          <CalendarImportPanel
-            importCalendarText={importCalendarText}
-            message={calendarImportMessage}
-            setMessage={setCalendarImportMessage}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RailSectionHeader
+            className="pt-3"
+            trailing={
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-[var(--r-sm)] px-1.5 py-1 font-[family-name:var(--font-ui)] text-[11.5px] font-medium normal-case tracking-normal transition-colors",
+                  sortCalendarTodosByDueDate
+                    ? "bg-[color:var(--ink)] !text-[color:var(--card)]"
+                    : "text-[color:var(--ink-2)] hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]",
+                )}
+                aria-pressed={sortCalendarTodosByDueDate}
+                title="Sort todos by due date"
+                onClick={toggleCalendarTodoSort}
+              >
+                <CalendarDays className="h-3.5 w-3.5" />
+                Due date
+              </button>
+            }
+          >
+            {"Today's Input"}
+          </RailSectionHeader>
+          {/* Upper region: scrollable today's-input list. flex-1 + min-h-0
+              lets it shrink so the pinned events region below stays visible
+              even when the user has many todos. */}
+          <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 [scrollbar-color:var(--line)_transparent]">
+            {renderReminderList(
+              calendarInboxTasks,
+              "All open todos are complete.",
+              false,
+              sortCalendarTodosByDueDate,
+            )}
+          </div>
+
+          {/* Draggable divider between the upper todos region and the
+              pinned events region. Drag up to make events taller, drag
+              down to give todos more room. Double-click resets. */}
+          <RowResizeHandle
+            label="Resize events panel"
+            onPointerDown={beginCalendarSplitResize}
+            onKeyAdjust={adjustCalendarSplit}
+            onReset={resetCalendarSplit}
           />
 
-          <SectionHeader title="Today's Input" />
-          {renderReminderList(
-            inboxTasks,
-            "All open todos are complete.",
-            true,
-            false,
-          )}
-        </>
+          {/* Lower region: pinned upcoming-events glance. User-controllable
+              height via the handle above; long lists scroll internally. */}
+          <CalendarTabUpcomingEvents
+            events={upcomingEvents}
+            todoLists={todoLists}
+            todayDateKey={todayDateKey}
+            heightPx={calendarEventsHeight}
+            onManage={() => setActiveView("events")}
+          />
+        </div>
       )}
 
       {activeView === "reminders" && (
-        <>
-          <SectionHeader title="Todo List" />
-          <AiTodoImportPanel
-            selectedDate={selectedDate}
-            todoLists={todoLists}
-            onImport={importParsedTodos}
-          />
-          <TodoListsManager
-            todoLists={todoLists}
-            isAddingList={isAddingList}
-            name={newListName}
-            color={newListColor}
-            onNameChange={setNewListName}
-            onColorChange={setNewListColor}
-            onAddStart={() => setIsAddingList(true)}
-            onCancel={() => setIsAddingList(false)}
-            onSubmit={() => {
-              upsertTodoList(
-                createTodoList({
-                  name: newListName,
-                  color: newListColor,
-                }),
-              );
-              setNewListName("");
-              setNewListColor("emerald");
-              setIsAddingList(false);
-            }}
-            onDelete={deleteTodoList}
-          />
-          {renderReminderList(todoTasks, "No todos yet.", true, true)}
-        </>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RailSectionHeader
+            className="pt-3"
+            trailing={
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-[var(--r-sm)] px-1.5 py-1 font-[family-name:var(--font-ui)] text-[11.5px] font-medium normal-case tracking-normal transition-colors",
+                  hideDoneReminders
+                    ? "bg-[color:var(--ink)] !text-[color:var(--card)]"
+                    : "text-[color:var(--ink-2)] hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]",
+                )}
+                aria-pressed={hideDoneReminders}
+                title={
+                  hideDoneReminders
+                    ? "Show completed reminders"
+                    : "Hide completed reminders"
+                }
+                onClick={toggleHideDoneReminders}
+              >
+                {hideDoneReminders ? (
+                  <EyeOff className="h-3.5 w-3.5" />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" />
+                )}
+                Hide done
+              </button>
+            }
+          >
+            Todo List
+          </RailSectionHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-4 [scrollbar-color:var(--line)_transparent]">
+            {renderReminderList(visibleTodoTasks, "No todos yet.", true)}
+          </div>
+        </div>
+      )}
+
+      {activeView === "events" && (
+        <EventsPanel
+          events={events}
+          todoLists={todoLists}
+          upsertEvent={upsertEvent}
+          deleteEvent={deleteEvent}
+        />
       )}
 
       {activeView === "periods" && (
@@ -2904,124 +3756,131 @@ function LeftRail({
           deletePeriod={deletePeriod}
         />
       )}
+
+      {activeView === "agent" && (
+        <AgentPanel
+          selectedDate={selectedDate}
+          todoLists={todoLists}
+          onImport={importParsedTodos}
+        />
+      )}
     </aside>
   );
 }
 
-function AiTodoImportPanel({
-  selectedDate,
-  todoLists,
-  onImport,
-}: {
-  selectedDate: string;
-  todoLists: TodoList[];
-  onImport: (items: ParsedTodoCandidate[]) => void;
-}) {
-  const [text, setText] = useState("");
-  const [message, setMessage] = useState("");
-  const [isParsing, setIsParsing] = useState(false);
-
-  const parseTodos = async () => {
-    const trimmed = text.trim();
-    if (!trimmed || isParsing) return;
-
-    setIsParsing(true);
-    setMessage("");
-
-    try {
-      const response = await fetch("/api/parse-todos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: trimmed,
-          selectedDate,
-          existingLists: todoLists.map((list) => ({
-            id: list.id,
-            name: list.name,
-          })),
-        }),
-      });
-
-      const payload = (await response.json()) as
-        | ParseTodosResponse
-        | { error?: string };
-
-      if (!response.ok) {
-        setMessage(
-          "error" in payload && payload.error
-            ? payload.error
-            : "Could not parse todos.",
-        );
-        return;
-      }
-
-      const todos = "todos" in payload ? payload.todos : [];
-      if (!todos.length) {
-        setMessage("No todos found.");
-        return;
-      }
-
-      onImport(todos);
-      setText("");
-      const warningText =
-        "warnings" in payload && payload.warnings.length
-          ? ` ${payload.warnings.join(" ")}`
-          : "";
-      setMessage(`Added ${todos.length} todo${todos.length === 1 ? "" : "s"}.${warningText}`);
-    } catch {
-      setMessage("Could not reach the AI parser.");
-    } finally {
-      setIsParsing(false);
-    }
-  };
-
+function BrandHeader() {
   return (
-    <div className="mt-5 rounded-lg border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
-        <Zap className="h-3.5 w-3.5" />
-        AI import
+    <div className="flex shrink-0 items-center gap-2.5 border-b border-[color:var(--line-soft)] px-4 pb-3.5 pt-4">
+      <div className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] bg-[#1A170E] font-[family-name:var(--font-disp)] text-[16px] font-semibold italic tracking-[-0.02em] text-[#F5EDD6] shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] dark:bg-[#F5EDD6] dark:text-[#14110A]">
+        L
       </div>
-      <textarea
-        className="min-h-20 w-full resize-none rounded-md border border-zinc-200 bg-white px-2.5 py-2 text-xs text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:placeholder:text-zinc-500"
-        placeholder="BPS3071: lab report due Friday 17:00; book dentist tomorrow"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-      />
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <div className="min-w-0 truncate text-[11px] text-zinc-400 dark:text-zinc-500">
-          {message}
-        </div>
-        <Button
-          type="button"
-          variant="soft"
-          size="sm"
-          onClick={parseTodos}
-          disabled={!text.trim() || isParsing}
-        >
-          {isParsing ? "Parsing" : "Parse & add"}
-        </Button>
+      <div className="min-w-0 flex-1 truncate font-[family-name:var(--font-disp)] text-[17px] font-medium italic tracking-[-0.01em] text-[color:var(--ink)]">
+        <span className="font-[family-name:var(--font-ui)] font-semibold not-italic tracking-[-0.015em]">
+          Lizhi
+        </span>{" "}
+        <span className="opacity-70">Routine</span>
       </div>
+      <NextLink
+        href="/settings"
+        className="inline-grid h-7 w-7 shrink-0 place-items-center rounded-[var(--r-sm)] text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+        title="Settings"
+        aria-label="Settings"
+      >
+        <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+      </NextLink>
     </div>
+  );
+}
+
+/**
+ * Compact horizontal tab used in the rail's top segmented control. Four
+ * equal-width buttons, icon-led with a tiny label underneath and a count
+ * badge in the top-right corner when relevant. Replaces the old vertical
+ * NavItem stack so the rail doesn't burn a whole column on navigation.
+ */
+function RailTab({
+  icon,
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count?: number;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      title={typeof count === "number" ? `${label} (${count})` : label}
+      onClick={onClick}
+      className={cn(
+        "relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-[var(--r-sm)] px-1 py-1.5 transition-colors",
+        active
+          ? "bg-[color:var(--ink)] !text-[color:var(--card)] shadow-[0_1px_2px_rgba(20,18,10,0.18)]"
+          : "text-[color:var(--ink-2)] hover:bg-[color:var(--hover)] hover:text-[color:var(--ink)]",
+      )}
+    >
+      <span aria-hidden>{icon}</span>
+      <span className="text-[10px] font-medium leading-none">{label}</span>
+      {typeof count === "number" && count > 0 && (
+        <span
+          className={cn(
+            "absolute right-1 top-1 rounded-full px-1 py-[1px] font-[family-name:var(--font-mono)] text-[8.5px] leading-none",
+            active
+              ? "bg-[color:var(--card)]/20 text-[color:var(--card)]"
+              : "bg-[color:var(--card)] text-[color:var(--ink-3)] ring-1 ring-[color:var(--line)]",
+          )}
+        >
+          {count}
+        </span>
+      )}
+    </button>
   );
 }
 
 function NavItem({
   icon,
   label,
+  count,
   active,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
+  count?: number;
   active?: boolean;
   onClick?: () => void;
 }) {
   const content = (
     <>
-      <span className={cn("transition-colors", active ? "text-indigo-600 dark:text-indigo-300" : "text-zinc-500 dark:text-zinc-400")}>
+      <span
+        className={cn(
+          "shrink-0 transition-colors",
+          active
+            ? "!text-[color:var(--card)]"
+            : "text-[color:var(--ink-3)]",
+        )}
+      >
         {icon}
       </span>
-      {label}
+      <span className="truncate">{label}</span>
+      {typeof count === "number" && (
+        <span
+          className={cn(
+            "ml-auto rounded-full px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[11px] leading-none",
+            active
+              ? "bg-[color:var(--card)]/15 !text-[color:var(--card)]"
+              : "bg-[color:var(--sunken)] text-[color:var(--ink-3)]",
+          )}
+        >
+          {count}
+        </span>
+      )}
     </>
   );
 
@@ -3030,10 +3889,10 @@ function NavItem({
       <button
         type="button"
         className={cn(
-          "flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-sm font-medium transition-colors",
+          "flex min-h-8 w-full items-center gap-2.5 rounded-[9px] px-2.5 py-[7px] text-left text-[13.5px] font-medium transition-colors",
           active
-            ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm ring-1 ring-zinc-200/70"
-            : "text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/70 dark:hover:bg-zinc-800/70 hover:text-zinc-900 dark:hover:text-zinc-100",
+            ? "bg-[color:var(--ink)] !text-[color:var(--card)]"
+            : "text-[color:var(--ink-2)] hover:bg-[color:var(--hover)] hover:text-[color:var(--ink)]",
         )}
         onClick={onClick}
       >
@@ -3045,104 +3904,13 @@ function NavItem({
   return (
     <div
       className={cn(
-        "flex h-9 items-center gap-2.5 rounded-md px-2.5 text-sm font-medium",
-        active ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm ring-1 ring-zinc-200/70" : "text-zinc-600 dark:text-zinc-300",
+        "flex min-h-8 items-center gap-2.5 rounded-[9px] px-2.5 py-[7px] text-[13.5px] font-medium",
+        active
+          ? "bg-[color:var(--ink)] !text-[color:var(--card)]"
+          : "text-[color:var(--ink-2)]",
       )}
     >
       {content}
-    </div>
-  );
-}
-
-function CalendarImportPanel({
-  importCalendarText,
-  message,
-  setMessage,
-}: {
-  importCalendarText: (text: string) => void;
-  message: string;
-  setMessage: (message: string) => void;
-}) {
-  const [url, setUrl] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const handleFile = async (file?: File) => {
-    if (!file) return;
-    const text = await file.text();
-    importCalendarText(text);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleUrlImport = async () => {
-    const trimmedUrl = url.trim();
-    if (!trimmedUrl) return;
-
-    setIsLoading(true);
-    setMessage("Importing calendar link...");
-
-    try {
-      const response = await fetch(trimmedUrl);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const text = await response.text();
-      importCalendarText(text);
-      setUrl("");
-    } catch {
-      setMessage(
-        "Could not fetch that link. Try downloading the .ics file and importing it.",
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div className="mt-5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3">
-      <div className="mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-        <CalendarPlus className="h-3 w-3" />
-        Import calendar
-      </div>
-      <input
-        ref={fileInputRef}
-        className="hidden"
-        type="file"
-        accept=".ics,text/calendar"
-        onChange={(event) => void handleFile(event.target.files?.[0])}
-      />
-      <div className="flex gap-1.5">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="flex-1"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Upload className="h-3.5 w-3.5" />
-          File
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="flex-1"
-          disabled={isLoading || !url.trim()}
-          onClick={() => void handleUrlImport()}
-        >
-          <Link className="h-3.5 w-3.5" />
-          URL
-        </Button>
-      </div>
-      <input
-        className="mt-2 w-full rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 outline-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-        placeholder="Paste .ics URL"
-        value={url}
-        onChange={(event) => setUrl(event.target.value)}
-      />
-      {message && (
-        <div className="mt-2 rounded-md bg-zinc-50 dark:bg-zinc-950 px-2.5 py-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-          {message}
-        </div>
-      )}
     </div>
   );
 }
@@ -3164,6 +3932,7 @@ type ReminderEditorProps = {
   onListIdChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
+  onDelete?: () => void;
 };
 
 function ReminderEditor({
@@ -3183,79 +3952,144 @@ function ReminderEditor({
   onListIdChange,
   onCancel,
   onSubmit,
+  onDelete,
 }: ReminderEditorProps) {
+  const [newTag, setNewTag] = useState("");
+  const selectedList = todoLists.find((list) => list.id === listId);
+  const parsedTags = parseTags(tags);
+  const dueMeta =
+    dueDate || dueTime
+      ? `${dueDate || "Any day"}${dueTime ? ` ${dueTime}` : ""}`
+      : "No deadline";
+  const commitNewTag = () => {
+    const trimmed = newTag.trim();
+    if (!trimmed) return;
+    const next = [...parsedTags, trimmed].filter(
+      (tag, index, allTags) =>
+        allTags.findIndex(
+          (item) => item.toLocaleLowerCase() === tag.toLocaleLowerCase(),
+        ) === index,
+    );
+    onTagsChange(next.join(", "));
+    setNewTag("");
+  };
+  const removeTag = (tagToRemove: string) => {
+    onTagsChange(parsedTags.filter((tag) => tag !== tagToRemove).join(", "));
+  };
+
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3 shadow-sm">
-      <input
-        className="w-full rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-sm text-zinc-900 dark:text-zinc-100 outline-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-        placeholder="What needs doing?"
-        value={title}
-        onChange={(event) => onTitleChange(event.target.value)}
-        autoFocus
-      />
-      <div className="mt-2 grid grid-cols-2 gap-1.5">
-        <select
-          className="rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-          value={category}
-          onChange={(event) => onCategoryChange(event.target.value as Category)}
-        >
-          <option value="T0">T0</option>
-          <option value="T1">T1</option>
-          <option value="T2">T2</option>
-        </select>
-        <select
-          className="rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-          value={listId}
-          onChange={(event) => onListIdChange(event.target.value)}
-        >
-          {todoLists.map((list) => (
-            <option key={list.id} value={list.id}>
-              {list.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-1.5">
-        <input
-          className="rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-          type="date"
-          value={dueDate}
-          onChange={(event) => onDueDateChange(event.target.value)}
+    <EditorModal onClose={onCancel}>
+      <div className={EDITOR_CARD_CLASS}>
+        <EditorHeader
+          eyebrow={submitLabel === "Add" ? "Add todo" : "Edit todo"}
+          title={title.trim() || "New todo"}
+          meta={[`Tier ${category}`, selectedList?.name, dueMeta]}
+          onCancel={onCancel}
         />
-        <input
-          className="rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-          type="time"
-          value={dueTime}
-          onChange={(event) => onDueTimeChange(event.target.value)}
+
+      <div className={EDITOR_BODY_CLASS}>
+        <label className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Title</span>
+          <input
+            className={EDITOR_PLAIN_INPUT_CLASS}
+            placeholder="What needs doing?"
+            value={title}
+            onChange={(event) => onTitleChange(event.target.value)}
+          />
+        </label>
+        <div className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Tier</span>
+          <EditorTierSegment value={category} onChange={onCategoryChange} />
+        </div>
+        <div className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>List</span>
+          <div className="relative">
+            <select
+              className={cn(EDITOR_PLAIN_INPUT_CLASS, "appearance-none pr-7")}
+              value={listId}
+              onChange={(event) => onListIdChange(event.target.value)}
+            >
+              {todoLists.map((list) => (
+                <option key={list.id} value={list.id}>
+                  {list.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[color:var(--ink-3)]" />
+          </div>
+        </div>
+        <div className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Due</span>
+          <div className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] font-medium text-[color:var(--ink)]">
+            <label className="inline-flex items-center gap-1.5">
+              <CalendarDays className="h-3.5 w-3.5 text-[color:var(--ink-3)]" />
+              <input
+                className="w-[7.4rem] bg-transparent font-mono text-[13px] outline-none focus:rounded-[var(--r-sm)] focus:bg-[color:var(--sunken)] focus:ring-2 focus:ring-[color:var(--ring)]"
+                type="date"
+                value={dueDate}
+                onChange={(event) => onDueDateChange(event.target.value)}
+              />
+            </label>
+            <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-[color:var(--ink-4)]">
+              at
+            </span>
+            <label className="inline-flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-[color:var(--ink-3)]" />
+              <input
+                className="w-[4.8rem] bg-transparent font-mono text-[13px] outline-none focus:rounded-[var(--r-sm)] focus:bg-[color:var(--sunken)] focus:ring-2 focus:ring-[color:var(--ring)]"
+                type="time"
+                value={dueTime}
+                onChange={(event) => onDueTimeChange(event.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+        <div className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Tags</span>
+          <div className="flex min-h-8 flex-wrap items-center gap-1.5">
+            {parsedTags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className="inline-flex h-6 items-center gap-1 rounded-full bg-[color:var(--sunken)] px-2 text-[11px] font-semibold !text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--hover)] hover:!text-[color:var(--ink)]"
+                title={`Remove ${tag}`}
+                onClick={() => removeTag(tag)}
+              >
+                {tag}
+                <X className="h-3 w-3 opacity-50" />
+              </button>
+            ))}
+            <input
+              className="h-7 min-w-20 flex-1 bg-transparent text-[13px] italic text-[color:var(--ink-3)] outline-none placeholder:text-[color:var(--ink-3)] focus:text-[color:var(--ink)]"
+              placeholder="Add tag..."
+              value={newTag}
+              onBlur={commitNewTag}
+              onChange={(event) => setNewTag(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === ",") {
+                  event.preventDefault();
+                  commitNewTag();
+                }
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+        <EditorFooter
+          onDelete={onDelete}
+          onCancel={onCancel}
+          onSubmit={onSubmit}
+          submitLabel={submitLabel}
+          submitDisabled={!title.trim()}
         />
       </div>
-      <input
-        className="mt-2 w-full rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 outline-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-        placeholder="Tags, comma separated"
-        value={tags}
-        onChange={(event) => onTagsChange(event.target.value)}
-      />
-      <div className="mt-2.5 flex justify-end gap-1.5">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          onClick={onSubmit}
-          disabled={!title.trim()}
-        >
-          {submitLabel}
-        </Button>
-      </div>
-    </div>
+    </EditorModal>
   );
 }
 
 type ReminderCardProps = {
   task: TodoWithMeta;
-  showScheduleState?: boolean;
   todoLists: TodoList[];
   updateReminder: (taskId: string, values: Partial<TodoItem>) => void;
   deleteReminder: (taskId: string) => void;
@@ -3264,192 +4098,103 @@ type ReminderCardProps = {
 function TodoListGroups({
   tasks,
   todoLists,
-  showScheduleState,
+  sortByDueDate,
+  collapsedListIds,
+  onToggleListCollapse,
   updateReminder,
   deleteReminder,
 }: {
   tasks: TodoWithMeta[];
   todoLists: TodoList[];
-  showScheduleState: boolean;
+  sortByDueDate: boolean;
+  collapsedListIds: Set<string>;
+  onToggleListCollapse: (listId: string) => void;
   updateReminder: (taskId: string, values: Partial<TodoItem>) => void;
   deleteReminder: (taskId: string) => void;
 }) {
+  // When sorting by due date, flatten all groups into a single chronological
+  // list — otherwise the list-grouping dominates and the sort isn't visible.
+  // Each ReminderCard renders its own list chip so list context is preserved.
+  if (sortByDueDate) {
+    const sortedTasks = [...tasks].sort(compareTodosByDueDate);
+    return (
+      <div>
+        {sortedTasks.map((task) => (
+          <ReminderCard
+            key={task.id}
+            task={task}
+            todoLists={todoLists}
+            updateReminder={updateReminder}
+            deleteReminder={deleteReminder}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  const groups = todoLists
+    .map((list) => ({
+      list,
+      tasks: tasks.filter((task) => task.list_id === list.id),
+    }))
+    .filter((group) => group.tasks.length > 0);
+
   return (
-    <div className="space-y-3">
-      {todoLists
-        .map((list) => ({
-          list,
-          tasks: tasks.filter((task) => task.list_id === list.id),
-        }))
-        .filter((group) => group.tasks.length > 0)
-        .map((group) => {
+    <div className="space-y-1.5">
+      {groups.map((group) => {
           const styles = todoListColorTokens(group.list.color);
+          const isCollapsed = collapsedListIds.has(group.list.id);
 
           return (
             <div key={group.list.id}>
-              <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
-                <span className={cn("h-2 w-2 rounded-full", styles.accent)} />
-                {group.list.name}
-              </div>
-              <div className="space-y-2">
-                {group.tasks.map((task) => (
-                  <ReminderCard
-                    key={task.id}
-                    task={task}
-                    showScheduleState={showScheduleState}
-                    todoLists={todoLists}
-                    updateReminder={updateReminder}
-                    deleteReminder={deleteReminder}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })}
-    </div>
-  );
-}
-
-function TodoListsManager({
-  todoLists,
-  isAddingList,
-  name,
-  color,
-  onNameChange,
-  onColorChange,
-  onAddStart,
-  onCancel,
-  onSubmit,
-  onDelete,
-}: {
-  todoLists: TodoList[];
-  isAddingList: boolean;
-  name: string;
-  color: TodoListColor;
-  onNameChange: (value: string) => void;
-  onColorChange: (value: TodoListColor) => void;
-  onAddStart: () => void;
-  onCancel: () => void;
-  onSubmit: () => void;
-  onDelete: (listId: string) => void;
-}) {
-  const colors: TodoListColor[] = [
-    "blue",
-    "emerald",
-    "amber",
-    "rose",
-    "violet",
-    "zinc",
-  ];
-
-  return (
-    <div className="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2.5">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-          Sublists
-        </div>
-        <button
-          type="button"
-          className="rounded p-1 text-zinc-400 dark:text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200"
-          title="Add list"
-          aria-label="Add list"
-          onClick={onAddStart}
-        >
-          <CirclePlus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {todoLists.map((list) => {
-          const styles = todoListColorTokens(list.color);
-          return (
-            <div
-              key={list.id}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium",
-                styles.block,
-                styles.text,
-              )}
-            >
-              <span className={cn("h-1.5 w-1.5 rounded-full", styles.accent)} />
-              {list.name}
-              {!list.built_in && (
-                <button
-                  type="button"
-                  className="ml-0.5 text-zinc-400 dark:text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400"
-                  title={`Delete ${list.name}`}
-                  aria-label={`Delete ${list.name}`}
-                  onClick={() => onDelete(list.id)}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {isAddingList && (
-        <div className="mt-2 space-y-2 rounded-md bg-zinc-50 dark:bg-zinc-950 p-2">
-          <input
-            className="w-full rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-            placeholder="List name"
-            value={name}
-            onChange={(event) => onNameChange(event.target.value)}
-            autoFocus
-          />
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex gap-1">
-              {colors.map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={cn(
-                    "h-5 w-5 rounded-full ring-offset-2",
-                    todoListColorTokens(item).accent,
-                    color === item && "ring-2 ring-zinc-400",
-                  )}
-                  title={item}
-                  aria-label={item}
-                  onClick={() => onColorChange(item)}
-                />
-              ))}
-            </div>
-            <div className="flex gap-1">
-              <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-                Cancel
-              </Button>
-              <Button
+              <button
                 type="button"
-                variant="primary"
-                size="sm"
-                disabled={!name.trim()}
-                onClick={onSubmit}
+                className="flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-[13.5px] font-semibold tracking-[-0.005em] text-[color:var(--ink)] transition-colors hover:bg-[color:var(--hover)]"
+                aria-expanded={!isCollapsed}
+                onClick={() => onToggleListCollapse(group.list.id)}
               >
-                Add
-              </Button>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 shrink-0 text-[color:var(--ink-3)] transition-transform",
+                      isCollapsed && "-rotate-90",
+                    )}
+                  />
+                  <span className={cn("h-2 w-2 shrink-0 rounded-full", styles.accent)} />
+                  <span className="truncate">{group.list.name}</span>
+                </span>
+                <span className="rounded-full bg-[color:var(--sunken)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[10.5px] leading-none text-[color:var(--ink-3)]">
+                  {group.tasks.length}
+                </span>
+              </button>
+              {!isCollapsed && (
+                <div>
+                  {group.tasks.map((task) => (
+                    <ReminderCard
+                      key={task.id}
+                      task={task}
+                      todoLists={todoLists}
+                      updateReminder={updateReminder}
+                      deleteReminder={deleteReminder}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-      )}
+          );
+        })}
     </div>
   );
-}
-
-function reminderScheduleLabel(task: TodoWithMeta) {
-  if (task.status === "completed") return null;
-  if (task.allocatedMinutes <= 0) {
-    return task.due_date || task.due_time ? "Deadline only" : "No time allocated";
-  }
-  return `${formatDuration(task.allocatedMinutes)} allocated`;
 }
 
 function ReminderCard({
   task,
-  showScheduleState = false,
   todoLists,
   updateReminder,
   deleteReminder,
 }: ReminderCardProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const [isContextOpen, setIsContextOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [category, setCategory] = useState<Category>(task.category);
   const [dueDate, setDueDate] = useState(task.due_date ?? "");
@@ -3459,7 +4204,7 @@ function ReminderCard({
   const styles = categoryTokens(task.category);
   const listStyles = todoListColorTokens(task.list.color);
   const dueLabel = formatTodoDue(task);
-  const scheduleLabel = reminderScheduleLabel(task);
+  const dueUrgency = todoDueUrgencyTokens(task);
   const canDrag = task.status !== "completed";
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
@@ -3512,95 +4257,176 @@ function ReminderCard({
           setIsEditing(false);
         }}
         onSubmit={saveReminder}
+        onDelete={() => {
+          deleteReminder(task.id);
+          setIsEditing(false);
+        }}
       />
     );
   }
 
+  const docCount = task.context_docs.length;
+  const hasEstimate = task.estimate !== null;
+  const hasContext = docCount > 0 || hasEstimate;
+
+  // Structure: outer wrapper (NOT draggable, hosts hover styles + the
+  // paperclip + panel as siblings) wraps an inner draggable div. Keeping
+  // the draggable div free of child buttons / panels was necessary to get
+  // dnd-kit drag working on Windows Chrome — when those siblings lived
+  // inside the draggable element, their pointer-event surfaces (even with
+  // `pointer-events: none` on the invisible state) would intermittently
+  // capture the pointerdown that PointerSensor was waiting for.
+  //
+  // `touch-none` is on the outer wrapper too: while dragging the pointer
+  // can leave the inner div and end up over the wrapper's padding/border,
+  // and Safari (trackpad) needs the whole surface to opt out of native
+  // pan gestures or it'll start a horizontal swipe-back instead of a drag.
   return (
     <div
-      ref={setNodeRef}
-      style={transformStyle}
       className={cn(
-        "group relative rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2.5 transition-all duration-150 hover:border-zinc-300 dark:hover:border-zinc-600 hover:shadow-sm",
-        canDrag
-          ? "cursor-grab select-none touch-none active:cursor-grabbing"
-          : "cursor-default opacity-50",
-        isDragging && "z-50 opacity-90 shadow-md",
+        "group relative rounded-[10px] border border-transparent transition-all duration-150 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)]",
+        dueUrgency?.card,
+        canDrag && "touch-none select-none",
+        isDragging &&
+          "z-50 border-[color:var(--line)] bg-[color:var(--hover)] shadow-[0_10px_24px_-14px_rgba(20,18,10,0.35)]",
       )}
-      {...(canDrag ? listeners : {})}
-      {...attributes}
-      title={todoHoverTitle(task)}
     >
-      <div className="min-w-0 pr-6 pt-px">
-        <div className="flex min-w-0 items-start gap-2">
+      <div
+        ref={setNodeRef}
+        style={transformStyle}
+        className={cn(
+          "flex items-start gap-2.5 rounded-[10px] p-2.5",
+          canDrag
+            ? "cursor-grab select-none touch-none active:cursor-grabbing"
+            : "cursor-default opacity-50",
+          isDragging && "opacity-95",
+        )}
+        {...(canDrag ? listeners : {})}
+        {...attributes}
+        title={todoHoverTitle(task)}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setIsEditing(true);
+        }}
+      >
+        <button
+          type="button"
+          className={cn(
+            "mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border-[1.5px] bg-[color:var(--card)] transition-colors",
+            task.status === "completed"
+              ? "border-[color:var(--ink)] bg-[color:var(--ink)] !text-[color:var(--card)]"
+              : "border-[color:var(--ink-4)] text-transparent group-hover:border-[color:var(--ink-3)]",
+          )}
+          title={task.status === "completed" ? "Mark incomplete" : "Complete"}
+          onPointerDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onClick={() => {
+            const isCompleting = task.status !== "completed";
+            // When marking complete, auto-fill actual_minutes from the
+            // computed past-blocks tally — same value the progress bar
+            // shows. 0 means "no blocks scheduled" → leave null so stats
+            // don't get polluted with phantom "0 min" data points; the
+            // user (or backfill) can fill it in later.
+            const update: Partial<TodoItem> = {
+              status: isCompleting ? "completed" : "pending",
+            };
+            if (isCompleting && task.completedMinutes > 0) {
+              update.actual_minutes = task.completedMinutes;
+            }
+            updateReminder(task.id, update);
+          }}
+        >
+          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+        </button>
+        <div className="min-w-0 flex-1">
           <div
             className={cn(
-              "min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-900 dark:text-zinc-100",
-              task.status === "completed" && "line-through text-zinc-400 dark:text-zinc-500",
+              "truncate text-[13px] font-medium leading-[1.3] text-[color:var(--ink)]",
+              // Right-pad so the title clears the corner paperclip button.
+              hasContext ? "pr-7" : "group-hover:pr-7",
+              task.status === "completed" && "line-through text-[color:var(--ink-3)]",
             )}
           >
             {task.title}
           </div>
-        </div>
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 pr-10 text-[11px] text-zinc-500 dark:text-zinc-400">
-          <span className={cn("shrink-0 rounded px-1.5 py-0.5 font-semibold tracking-wide", styles.chip)}>
-            {task.category}
-          </span>
-          <span className={cn("min-w-0 shrink truncate rounded border px-1.5 py-0.5", listStyles.block, listStyles.text)}>
-            {task.list.name}
-          </span>
-          {showScheduleState && scheduleLabel && scheduleLabel !== "Deadline only" && (
-            <span className="shrink-0 rounded bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 text-zinc-500 dark:text-zinc-400">
-              {scheduleLabel}
+          <div
+            className="mt-1.5 flex min-w-0 items-center gap-1.5 font-[family-name:var(--font-mono)] text-[10.5px] text-[color:var(--ink-3)]"
+          >
+            <span className={cn("inline-flex h-4 shrink-0 items-center rounded px-1.5 text-[9.5px] font-semibold tracking-[0.04em]", styles.chip)}>
+              {task.category}
             </span>
+            <span className={cn("inline-flex h-4 min-w-0 shrink items-center truncate rounded border px-1.5 text-[9.5px] font-medium", listStyles.block, listStyles.text)}>
+              {task.list.name}
+            </span>
+            {dueLabel && (
+              <span
+                className={cn(
+                  "ml-auto min-w-0 truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium",
+                  dueUrgency?.pill ??
+                    "bg-[color:var(--sunken)] text-[color:var(--ink-2)]",
+                )}
+              >
+                {dueLabel}
+              </span>
+            )}
+          </div>
+          {task.status === "pending" && hasEstimate && !isContextOpen && (
+            <div className="mt-2">
+              <TodoEstimateProgressBar
+                estimate={task.estimate!}
+                completedMinutes={task.completedMinutes}
+                compact
+              />
+            </div>
           )}
-          {dueLabel && (
-            <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-              {dueLabel}
-            </span>
+          {task.status === "completed" && task.estimate_snapshot && (
+            <EstimateAccuracyLine
+              snapshot={task.estimate_snapshot}
+              actualMinutes={task.actual_minutes}
+            />
           )}
         </div>
       </div>
+      {/*
+        Paperclip + panel live OUTSIDE the draggable div but inside the same
+        positioned wrapper. They never sit on top of the drag-grab area so
+        their pointer surfaces can't interfere with PointerSensor on Windows.
+      */}
       <button
         type="button"
+        onClick={() => setIsContextOpen((current) => !current)}
         className={cn(
-          "absolute right-2.5 top-2.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
-          task.status === "completed"
-            ? "border-indigo-500 bg-indigo-500 text-white"
-            : "border-zinc-300 dark:border-zinc-700 text-transparent hover:border-zinc-400 dark:hover:border-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800/60",
+          "absolute right-1.5 top-1.5 inline-flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[10px] transition-opacity",
+          hasContext
+            ? "bg-[color:var(--sunken)] text-[color:var(--ink-2)] hover:text-[color:var(--ink)]"
+            : "pointer-events-none text-[color:var(--ink-3)] opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink-2)]",
         )}
-        title={task.status === "completed" ? "Mark incomplete" : "Complete"}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={() =>
-          updateReminder(task.id, {
-            status: task.status === "completed" ? "pending" : "completed",
-          })
+        aria-pressed={isContextOpen}
+        title={
+          hasEstimate
+            ? "Open context & estimate"
+            : docCount > 0
+              ? `${docCount} attached doc${docCount === 1 ? "" : "s"}`
+              : "Attach instructions / estimate"
         }
+        aria-label="Toggle context panel"
       >
-        <Check className="h-2.5 w-2.5" strokeWidth={3} />
+        <Paperclip className="h-2.5 w-2.5" />
+        {docCount > 0 && (
+          <span className="font-[family-name:var(--font-mono)] text-[9.5px]">
+            {docCount}
+          </span>
+        )}
       </button>
-      <div className="absolute bottom-2 right-2 flex opacity-0 transition-opacity group-hover:opacity-100">
-        <button
-          type="button"
-          className="rounded p-0.5 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200"
-          title="Edit reminder"
-          aria-label={`Edit ${task.title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => setIsEditing(true)}
-        >
-          <Pencil className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          className="rounded p-0.5 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-rose-50 dark:hover:bg-rose-500/15 hover:text-rose-600 dark:hover:text-rose-400"
-          title="Delete reminder"
-          aria-label={`Delete ${task.title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => deleteReminder(task.id)}
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
-      </div>
+      {isContextOpen && (
+        <TodoContextPanel
+          todo={task}
+          completedMinutes={task.completedMinutes}
+          onUpdate={(values) => updateReminder(task.id, values)}
+          onClose={() => setIsContextOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -3643,7 +4469,7 @@ function DragOverlayCard({
   return (
     <div
       className={cn(
-        "relative w-64 overflow-hidden rounded-lg border p-3 pl-3.5 shadow-xl shadow-zinc-900/15 backdrop-blur",
+        "relative w-64 overflow-hidden rounded-lg border p-3 pl-3.5 shadow-[0_16px_40px_-18px_rgba(20,18,10,0.32)] backdrop-blur",
         styles.block,
         isSleep && SLEEP_BLOCK_CLASS,
       )}
@@ -3658,7 +4484,7 @@ function DragOverlayCard({
       <div
         className={cn(
           "ml-1 flex min-w-0 items-center gap-1.5 text-[13px]",
-          isSleep ? "text-white" : "text-zinc-900 dark:text-zinc-100",
+          isSleep ? "text-white" : "text-[color:var(--ink)]",
         )}
       >
         <span
@@ -3676,7 +4502,7 @@ function DragOverlayCard({
         <span
           className={cn(
             "inline-flex shrink-0 items-center gap-1 text-[11px] font-medium",
-            isSleep ? "text-white/75" : "text-zinc-500 dark:text-zinc-400",
+            isSleep ? "text-white/75" : "text-[color:var(--ink-2)]",
           )}
         >
           <Clock className="h-3 w-3" aria-hidden="true" />
@@ -3689,125 +4515,129 @@ function DragOverlayCard({
 
 type RightRailProps = {
   sleepTemplate?: RoutineTemplate;
-  scheduledSleep?: VisibleTask;
+  tonightSleep?: VisibleTask;
+  lastNightSleep?: VisibleTask;
   sleepTargetMinutes: number;
   setSleepTargetMinutes: (value: number) => void;
-  updateTask: (
-    task: VisibleTask | Task,
-    storageDateKey: string,
-    values: Partial<Task>,
-  ) => void;
+  onJumpToTask: (taskId: string) => void;
   templates: RoutineTemplate[];
   upsertTemplate: (template: RoutineTemplate) => void;
   deleteTemplate: (templateId: string) => void;
-  focusMinutes: number;
-  focusProgress: number;
 };
 
 function RightRail({
   sleepTemplate,
-  scheduledSleep,
+  tonightSleep,
+  lastNightSleep,
   sleepTargetMinutes,
   setSleepTargetMinutes,
-  updateTask,
+  onJumpToTask,
   templates,
   upsertTemplate,
   deleteTemplate,
-  focusMinutes,
-  focusProgress,
 }: RightRailProps) {
   const [isAdding, setIsAdding] = useState(false);
   const routineTemplates = templates.filter((template) => template.kind !== "sleep");
 
   return (
-    <aside className="flex h-full w-full min-h-0 flex-col border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/60">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-        <SectionLabel>Sleep</SectionLabel>
-        <SleepControl
-          template={sleepTemplate}
-          scheduledSleep={scheduledSleep}
-          sleepTargetMinutes={sleepTargetMinutes}
-          setSleepTargetMinutes={setSleepTargetMinutes}
-          updateTask={updateTask}
-        />
+    <aside className="flex h-full w-full min-h-0 flex-col bg-[color:var(--card)]">
+      <RailSectionHeader
+        className="pt-[18px]"
+        trailing={
+          <span className="cursor-default font-[family-name:var(--font-ui)] text-[11.5px] font-medium normal-case tracking-normal text-[color:var(--ink-3)]">
+            5 - 5
+          </span>
+        }
+      >
+        Sleep
+      </RailSectionHeader>
+      <SleepControl
+        template={sleepTemplate}
+        tonightSleep={tonightSleep}
+        lastNightSleep={lastNightSleep}
+        sleepTargetMinutes={sleepTargetMinutes}
+        setSleepTargetMinutes={setSleepTargetMinutes}
+        onJumpToTask={onJumpToTask}
+      />
 
-        <div className="mt-7 flex items-center justify-between">
-          <SectionLabel className="mb-0">Routines</SectionLabel>
+      <RailSectionHeader
+        className="pt-5"
+        trailing={
           <button
             type="button"
-            className="rounded-md p-1 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200"
+            className="inline-flex items-center gap-1 rounded-[var(--r-sm)] px-1.5 py-1 font-[family-name:var(--font-ui)] text-[11.5px] font-medium normal-case tracking-normal text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
             title="Add routine"
             aria-label="Add routine"
             onClick={() => setIsAdding(true)}
           >
-            <CirclePlus className="h-4 w-4" />
+            <CirclePlus className="h-3.5 w-3.5" />
+            New
           </button>
-        </div>
-        <div className="mt-3 space-y-2">
-          {isAdding && (
-            <RoutineTemplateEditor
-              submitLabel="Add"
-              onCancel={() => setIsAdding(false)}
-              onSubmit={(draft) => {
-                upsertTemplate(
-                  createTemplate({
-                    title: draft.title,
-                    category: draft.category,
-                    color: draft.color,
-                    icon: draft.icon,
-                    default_duration_minutes: draft.default_duration_minutes,
-                    kind: "routine",
-                  }),
-                );
-                setIsAdding(false);
-              }}
-            />
-          )}
-          {routineTemplates.map((template) => (
+        }
+      >
+        Routines
+      </RailSectionHeader>
+
+      {isAdding && (
+        <RoutineTemplateEditor
+          submitLabel="Add"
+          onCancel={() => setIsAdding(false)}
+          onSubmit={(draft) => {
+            upsertTemplate(
+              createTemplate({
+                title: draft.title,
+                category: draft.category,
+                color: draft.color,
+                icon: draft.icon,
+                default_duration_minutes: draft.default_duration_minutes,
+                commute_enabled: draft.commute_enabled,
+                commute_config: null,
+                kind: "routine",
+              }),
+            );
+            setIsAdding(false);
+          }}
+        />
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-0 pb-4 [scrollbar-color:var(--line)_transparent]">
+        {routineTemplates.length ? (
+          routineTemplates.map((template) => (
             <RoutineTemplateCard
               key={template.id}
               template={template}
               upsertTemplate={upsertTemplate}
               deleteTemplate={deleteTemplate}
             />
-          ))}
-        </div>
-      </div>
-
-      <div className="border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-5 py-4">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-            <Flame className="h-3.5 w-3.5 text-indigo-500" />
-            Focus
+          ))
+        ) : (
+          <div className="mx-3.5">
+            <EmptyState text="No routines yet." />
           </div>
-          <div className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            {Math.round(Math.min(100, focusProgress))}%
-          </div>
-        </div>
-        <Progress value={focusProgress} />
-        <div className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
-          {formatDuration(focusMinutes)} of {formatDuration(FIRE_TARGET_MINUTES)} target
-        </div>
+        )}
       </div>
     </aside>
   );
 }
 
-function SectionLabel({
+function RailSectionHeader({
   children,
+  trailing,
   className,
 }: {
   children: React.ReactNode;
+  trailing?: React.ReactNode;
   className?: string;
 }) {
   return (
     <div
       className={cn(
-        "mb-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500",
+        "flex items-center justify-between px-[18px] pb-2 font-[family-name:var(--font-mono)] text-[10.5px] font-medium uppercase tracking-[0.14em] text-[color:var(--ink-3)]",
         className,
       )}
     >
-      {children}
+      <span>{children}</span>
+      {trailing}
     </div>
   );
 }
@@ -3819,6 +4649,7 @@ type RoutineDraft = {
   category: Category;
   color: TodoListColor;
   icon: RoutineIconName;
+  commute_enabled: boolean;
   kind?: "routine";
 };
 
@@ -3827,11 +4658,13 @@ function RoutineTemplateEditor({
   submitLabel,
   onCancel,
   onSubmit,
+  onDelete,
 }: {
   template?: RoutineTemplate;
   submitLabel: string;
   onCancel: () => void;
   onSubmit: (template: RoutineDraft) => void;
+  onDelete?: () => void;
 }) {
   const [title, setTitle] = useState(template?.title ?? "");
   const [duration, setDuration] = useState(
@@ -3840,116 +4673,248 @@ function RoutineTemplateEditor({
   const [category, setCategory] = useState<Category>(template?.category ?? "T0");
   const [color, setColor] = useState<TodoListColor>(template?.color ?? "blue");
   const [icon, setIcon] = useState<RoutineIconName>(template?.icon ?? "zap");
+  const [isCommute, setIsCommute] = useState(
+    Boolean(template && isCommuteTemplate(template)),
+  );
+  const colorTokens = routineColorTokens(color);
+  const iconLabel =
+    ROUTINE_ICON_OPTIONS.find((option) => option.value === icon)?.label ?? "Icon";
+  const setDurationMinutes = (value: number) => {
+    setDuration(Math.max(5, Math.round(value) || 5));
+  };
+  const submitDisabled = !title.trim();
 
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3 shadow-sm">
-      <input
-        className="w-full rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-sm text-zinc-900 dark:text-zinc-100 outline-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-        placeholder="Routine name"
-        value={title}
-        onChange={(event) => setTitle(event.target.value)}
-        autoFocus
-      />
-      <div className="mt-2 grid grid-cols-[1fr_88px] gap-1.5">
-        <select
-          className="rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-          value={category}
-          onChange={(event) => setCategory(event.target.value as Category)}
-        >
-          <option value="T0">T0</option>
-          <option value="T1">T1</option>
-          <option value="T2">T2</option>
-        </select>
-        <input
-          className="rounded-md border border-zinc-200 dark:border-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
-          min={30}
-          step={30}
-          type="number"
-          value={duration}
-          onChange={(event) =>
-            setDuration(Math.max(30, Number(event.target.value) || 30))
-          }
-        />
-      </div>
-      <div className="mt-2">
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-          Icon
+    <EditorModal
+      onClose={onCancel}
+      widthClass="w-[460px] max-w-[calc(100vw-2rem)]"
+    >
+      <div className="overflow-hidden rounded-[18px] border border-[color:var(--line)] bg-[color:var(--card)] text-left font-[family-name:var(--font-ui)] text-[color:var(--ink)] shadow-[0_1px_0_rgba(255,255,255,0.7)_inset,0_1px_2px_rgba(20,18,10,0.04),0_12px_28px_-8px_rgba(20,18,10,0.18),0_24px_60px_-20px_rgba(20,18,10,0.2)] dark:shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]">
+        <div className="border-b border-[color:var(--line-soft)] bg-[radial-gradient(120%_100%_at_0%_0%,oklch(94%_0.04_70)_0%,transparent_60%),linear-gradient(180deg,var(--card),var(--sunken))] px-6 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className={EDITOR_LABEL_CLASS}>
+              {template ? "Edit routine" : "Add routine"}
+            </span>
+            <button
+              type="button"
+              className="inline-grid h-7 w-7 place-items-center rounded-full text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+              title="Close"
+              aria-label="Close routine editor"
+              onClick={onCancel}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="mt-3 flex min-w-0 items-center gap-3">
+            <span
+              className={cn(
+                "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--r-sm)] border",
+                colorTokens.block,
+                colorTokens.text,
+              )}
+              aria-hidden="true"
+            >
+              <RoutineIcon icon={icon} className="h-[18px] w-[18px]" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="truncate font-[family-name:var(--font-disp)] text-[20px] font-semibold leading-tight tracking-[-0.015em] text-[color:var(--ink)]">
+                {title.trim() || "Routine"}
+              </h2>
+              <div className={cn(EDITOR_META_CLASS, "mt-1")}>
+                <span>Tier {category}</span>
+                <EditorMetaDot />
+                <span>{formatEditorDuration(duration)}</span>
+                <EditorMetaDot />
+                <span>{iconLabel}</span>
+                {isCommute && (
+                  <>
+                    <EditorMetaDot />
+                    <span>Commute</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="grid grid-cols-4 gap-1">
-          {ROUTINE_ICON_OPTIONS.map((option) => {
-            const selected = icon === option.value;
-            return (
+
+        <div className="bg-[color:var(--card)] px-6 py-1">
+          <label className="block border-b border-[color:var(--line-soft)] py-3.5">
+            <span className={cn(EDITOR_LABEL_CLASS, "mb-2.5 block")}>Title</span>
+            <input
+              className="h-9 w-full rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 text-[13px] font-medium text-[color:var(--ink)] outline-none transition-colors placeholder:text-[color:var(--ink-3)] focus:border-[color:var(--line-strong)] focus:bg-[color:var(--card)] focus:ring-2 focus:ring-[color:var(--ring)]"
+              placeholder="Routine name"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+
+          <div className="border-b border-[color:var(--line-soft)] py-3.5">
+            <div className={cn(EDITOR_LABEL_CLASS, "mb-2.5")}>Tier</div>
+            <EditorTierSegment value={category} onChange={setCategory} />
+          </div>
+
+          <div className="border-b border-[color:var(--line-soft)] py-3.5">
+            <div className={cn(EDITOR_LABEL_CLASS, "mb-2.5")}>Minutes</div>
+            <div className="inline-flex h-9 w-fit items-center overflow-hidden rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[13px] font-semibold text-[color:var(--ink)] focus-within:border-[color:var(--line-strong)] focus-within:ring-2 focus-within:ring-[color:var(--ring)]">
               <button
-                key={option.value}
+                type="button"
+                className="flex h-full w-10 items-center justify-center !text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:!text-[color:var(--ink)]"
+                aria-label="Decrease minutes"
+                onClick={() => setDurationMinutes(duration - 5)}
+              >
+                -
+              </button>
+              <input
+                className="h-full w-14 bg-transparent text-center font-[family-name:var(--font-mono)] outline-none"
+                min={5}
+                step={5}
+                type="number"
+                value={duration}
+                onChange={(event) => setDurationMinutes(Number(event.target.value))}
+              />
+              <button
+                type="button"
+                className="flex h-full w-10 items-center justify-center !text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:!text-[color:var(--ink)]"
+                aria-label="Increase minutes"
+                onClick={() => setDurationMinutes(duration + 5)}
+              >
+                +
+              </button>
+              <span className="pr-2.5 font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.12em] text-[color:var(--ink-3)]">
+                min
+              </span>
+            </div>
+          </div>
+
+          <div className="border-b border-[color:var(--line-soft)] py-3.5">
+            <div className="mb-2.5 flex items-center justify-between gap-3">
+              <div>
+                <div className={EDITOR_LABEL_CLASS}>Commute</div>
+                <p className="mt-1 text-[11.5px] leading-snug text-[color:var(--ink-3)]">
+                  Mark this routine as a commute. Addresses, mode, and ETA are
+                  set on each scheduled time block.
+                </p>
+              </div>
+              <button
                 type="button"
                 className={cn(
-                  "flex h-7 items-center justify-center rounded-md border text-zinc-500 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
-                  selected &&
-                    "border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-400/70 dark:bg-indigo-500/20 dark:text-indigo-200",
+                  "inline-flex h-7 min-w-12 items-center justify-center rounded-full border px-3 text-[11px] font-semibold transition-colors",
+                  isCommute
+                    ? "border-[color:var(--ink)] bg-[color:var(--ink)] !text-[color:var(--card)]"
+                    : "border-[color:var(--line)] bg-[color:var(--card)] !text-[color:var(--ink-2)] hover:bg-[color:var(--sunken)]",
                 )}
-                title={option.label}
-                aria-label={option.label}
-                onClick={() => setIcon(option.value)}
+                onClick={() => setIsCommute((value) => !value)}
               >
-                <RoutineIcon icon={option.value} className="h-3.5 w-3.5" />
+                {isCommute ? "On" : "Off"}
               </button>
-            );
-          })}
+            </div>
+
+            {isCommute && (
+              <div className="rounded-[var(--r-sm)] border border-dashed border-[color:var(--line)] bg-[color:var(--sunken)] px-3 py-2 text-[11.5px] leading-snug text-[color:var(--ink-2)]">
+                Double-click a placed commute block to set From, To, mode, and
+                whether the window is departure-based or arrival-based.
+              </div>
+            )}
+          </div>
+
+          <div className="border-b border-[color:var(--line-soft)] py-3.5">
+            <div className={cn(EDITOR_LABEL_CLASS, "mb-2.5")}>Icon</div>
+            <div className="flex flex-wrap gap-1.5">
+              {ROUTINE_ICON_OPTIONS.map((option) => {
+                const selected = icon === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[color:var(--ink-2)] transition-colors hover:border-[color:var(--line-strong)] hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--ring)]",
+                      selected &&
+                        "border-[color:var(--ink)] bg-[color:var(--ink)] !text-[color:var(--card)]",
+                    )}
+                    title={option.label}
+                    aria-label={option.label}
+                    onClick={() => setIcon(option.value)}
+                  >
+                    <RoutineIcon icon={option.value} className="h-3.5 w-3.5" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="py-3.5">
+            <div className={cn(EDITOR_LABEL_CLASS, "mb-2.5")}>Colour</div>
+            <div className="flex flex-wrap gap-3">
+              {ROUTINE_COLORS.map((item) => {
+                const tokens = routineColorTokens(item);
+                const selected = color === item;
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    className={cn(
+                      "relative flex h-[26px] w-[26px] items-center justify-center rounded-full border border-transparent transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--ring)]",
+                      selected &&
+                        "after:absolute after:-inset-1 after:rounded-full after:border after:border-[color:var(--ink)]",
+                      tokens.accent,
+                    )}
+                    title={item}
+                    aria-label={`Use ${item}`}
+                    onClick={() => setColor(item)}
+                  >
+                    {selected && (
+                      <Check className="h-3.5 w-3.5 text-white drop-shadow-sm" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-[color:var(--line-soft)] bg-[color:var(--sunken)] px-6 py-3.5">
+          {onDelete ? (
+            <button
+              type="button"
+              className={EDITOR_DELETE_BUTTON_CLASS}
+              onClick={onDelete}
+            >
+              Delete
+            </button>
+          ) : (
+            <div />
+          )}
+          <div className="flex flex-1 justify-end gap-2">
+            <button
+              type="button"
+              className="inline-flex h-9 min-w-20 items-center justify-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-4 text-[13px] font-semibold !text-[color:var(--ink)] transition-colors hover:bg-[color:var(--sunken)]"
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 min-w-20 items-center justify-center rounded-[var(--r-sm)] bg-[color:var(--ink)] px-4 text-[13px] font-semibold !text-[color:var(--card)] transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() =>
+                onSubmit({
+                  id: template?.id,
+                  title: title.trim(),
+                  default_duration_minutes: duration,
+                  category,
+                  color,
+                  icon,
+                  commute_enabled: isCommute,
+                  kind: "routine",
+                })
+              }
+              disabled={submitDisabled}
+            >
+              {submitLabel}
+            </button>
+          </div>
         </div>
       </div>
-      <div className="mt-2">
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-          Colour
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {ROUTINE_COLORS.map((item) => {
-            const tokens = routineColorTokens(item);
-            return (
-              <button
-                key={item}
-                type="button"
-                className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 transition-colors hover:border-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 dark:border-zinc-800 dark:hover:border-zinc-600",
-                  color === item && "ring-2 ring-zinc-400 dark:ring-zinc-500",
-                )}
-                title={item}
-                aria-label={`Use ${item}`}
-                onClick={() => setColor(item)}
-              >
-                <span
-                  aria-hidden="true"
-                  className={cn("h-4 w-4 rounded-full", tokens.accent)}
-                />
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <div className="mt-2.5 flex justify-end gap-1.5">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          disabled={!title.trim()}
-          onClick={() =>
-            onSubmit({
-              id: template?.id,
-              title: title.trim(),
-              default_duration_minutes: duration,
-              category,
-              color,
-              icon,
-              kind: "routine",
-            })
-          }
-        >
-          {submitLabel}
-        </Button>
-      </div>
-    </div>
+    </EditorModal>
   );
 }
 
@@ -3985,6 +4950,7 @@ function RoutineTemplateCard({
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const styles = routineColorTokens(template.color);
+  const commuteRoutine = isCommuteTemplate(template);
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `template:${template.id}`,
@@ -4010,8 +4976,14 @@ function RoutineTemplateCard({
               category: nextTemplate.category,
               color: nextTemplate.color,
               icon: nextTemplate.icon,
+              commute_enabled: nextTemplate.commute_enabled,
+              commute_config: null,
             }),
           );
+          setIsEditing(false);
+        }}
+        onDelete={() => {
+          deleteTemplate(template.id);
           setIsEditing(false);
         }}
       />
@@ -4023,120 +4995,242 @@ function RoutineTemplateCard({
       ref={setNodeRef}
       style={transformStyle}
       className={cn(
-        "group flex cursor-grab select-none touch-none items-center gap-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2.5 transition-all duration-150 hover:border-zinc-300 dark:hover:border-zinc-600 hover:shadow-sm active:cursor-grabbing",
-        isDragging && "z-50 opacity-90 shadow-md",
+        "group mx-3 mb-1.5 flex cursor-grab select-none touch-none items-center gap-[11px] rounded-[11px] border border-transparent p-2.5 transition-all duration-150 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)] active:cursor-grabbing",
+        isDragging &&
+          "z-50 border-[color:var(--line)] bg-[color:var(--hover)] opacity-95 shadow-[0_10px_24px_-14px_rgba(20,18,10,0.35)]",
       )}
       {...listeners}
       {...attributes}
+      title={[
+        template.title,
+        `${template.category} - ${formatDuration(template.default_duration_minutes)}`,
+        commuteRoutine ? "Commute details are set per scheduled block" : null,
+      ]
+        .filter(Boolean)
+        .join("\n")}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsEditing(true);
+      }}
     >
       <div
         className={cn(
-          "flex h-9 w-9 shrink-0 items-center justify-center rounded-md",
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]",
           styles.block,
         )}
         aria-hidden="true"
       >
-        <RoutineIcon icon={template.icon} className={cn("h-4 w-4", styles.text)} />
+        <RoutineIcon icon={template.icon} className={cn("h-3.5 w-3.5", styles.text)} />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
+        <div className="truncate text-[13.5px] font-semibold tracking-[-0.005em] text-[color:var(--ink)]">
           {template.title}
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-          <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide", styles.chip)}>
+        <div className="mt-[3px] flex items-center gap-1.5 font-[family-name:var(--font-mono)] text-[10.5px] text-[color:var(--ink-3)]">
+          <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.04em]", styles.chip)}>
             {template.category}
           </span>
           <span>{formatDuration(template.default_duration_minutes)}</span>
+          {commuteRoutine && (
+            <>
+              <MapPin className="h-3 w-3 shrink-0" />
+              <span className="truncate">per block</span>
+            </>
+          )}
         </div>
       </div>
-      <div className="flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
-        <button
-          type="button"
-          className="rounded p-1 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200"
-          title="Edit routine"
-          aria-label={`Edit ${template.title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => setIsEditing(true)}
-        >
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          className="rounded p-1 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-rose-50 dark:hover:bg-rose-500/15 hover:text-rose-600 dark:hover:text-rose-400"
-          title="Delete routine"
-          aria-label={`Delete ${template.title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => deleteTemplate(template.id)}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      </div>
+      <svg
+        aria-hidden="true"
+        className="h-3.5 w-3.5 shrink-0 text-[color:var(--ink-4)] opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+      >
+        <circle cx="9" cy="6" r="1.4" />
+        <circle cx="9" cy="12" r="1.4" />
+        <circle cx="9" cy="18" r="1.4" />
+        <circle cx="15" cy="6" r="1.4" />
+        <circle cx="15" cy="12" r="1.4" />
+        <circle cx="15" cy="18" r="1.4" />
+      </svg>
     </div>
   );
 }
 
 type SleepControlProps = {
   template?: RoutineTemplate;
-  scheduledSleep?: VisibleTask;
+  tonightSleep?: VisibleTask;
+  lastNightSleep?: VisibleTask;
   sleepTargetMinutes: number;
   setSleepTargetMinutes: (value: number) => void;
-  updateTask: (
-    task: VisibleTask | Task,
-    storageDateKey: string,
-    values: Partial<Task>,
-  ) => void;
+  onJumpToTask: (taskId: string) => void;
 };
 
 function SleepControl({
   template,
-  scheduledSleep,
+  tonightSleep,
+  lastNightSleep,
   sleepTargetMinutes,
   setSleepTargetMinutes,
-  updateTask,
+  onJumpToTask,
 }: SleepControlProps) {
   if (!template) return null;
 
-  const duration = scheduledSleep?.duration_minutes ?? sleepTargetMinutes;
+  const minSleepMinutes = 5 * 60;
+  const maxSleepMinutes = 10 * 60;
+  // Slider always reflects (and only edits) the global preference. Editing
+  // an already-scheduled sleep block goes through clicking the block —
+  // mixing both into one slider was the original confusion.
+  const targetPercent = Math.min(
+    100,
+    Math.max(
+      0,
+      ((sleepTargetMinutes - minSleepMinutes) /
+        (maxSleepMinutes - minSleepMinutes)) *
+        100,
+    ),
+  );
 
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-          <Moon className="h-3.5 w-3.5 text-indigo-500" />
+    <div
+      className="mx-3.5 rounded-[var(--r)] border border-[color:var(--line)] p-3.5"
+      style={{
+        background:
+          "radial-gradient(120% 100% at 100% 0%, color-mix(in oklch, var(--block-sleep) 22%, transparent) 0%, transparent 60%), linear-gradient(180deg, color-mix(in oklch, var(--block-sleep) 9%, var(--card)), var(--card))",
+      }}
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--ink-2)]">
+          <Moon className="h-3.5 w-3.5 text-[color:var(--block-sleep)]" />
           Target duration
         </span>
-        <span className="text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
-          {formatDuration(duration)}
+        <span className="font-[family-name:var(--font-mono)] text-[14px] font-semibold tabular-nums text-[color:var(--ink)]">
+          {formatDuration(sleepTargetMinutes)}
         </span>
       </div>
-      <input
-        aria-label="Sleep target duration"
-        className="mb-3 w-full accent-indigo-600"
-        type="range"
-        min={5 * 60}
-        max={10 * 60}
-        step={30}
-        value={duration}
-        onChange={(event) => {
-          const nextValue = Number(event.target.value);
-          setSleepTargetMinutes(nextValue);
-          if (!scheduledSleep) return;
-          updateTask(scheduledSleep, scheduledSleep.storageDateKey, {
-            duration_minutes: nextValue,
-          });
-        }}
-      />
+      <div className="relative flex h-[22px] items-center">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-[color:var(--line)]">
+          <div
+            className="h-full rounded-full bg-[color:var(--block-sleep)]"
+            style={{ width: `${targetPercent}%` }}
+          />
+        </div>
+        <div
+          className="pointer-events-none absolute h-[18px] w-[18px] rounded-full border-2 border-[color:var(--block-sleep)] bg-[color:var(--card)] shadow-[0_1px_3px_rgba(20,18,10,0.18)]"
+          style={{ left: `calc(${targetPercent}% - 9px)` }}
+        />
+        <input
+          aria-label="Sleep target duration"
+          className="absolute inset-0 h-[22px] w-full cursor-pointer opacity-0"
+          type="range"
+          min={minSleepMinutes}
+          max={maxSleepMinutes}
+          step={30}
+          value={sleepTargetMinutes}
+          onChange={(event) => {
+            setSleepTargetMinutes(Number(event.target.value));
+          }}
+        />
+      </div>
       <DraggableBlock
         id={`template:${template.id}`}
         title="Sleep"
         category={template.category}
-        durationMinutes={duration}
+        durationMinutes={sleepTargetMinutes}
         dragData={{ type: "template", templateId: template.id }}
-        className={SLEEP_BLOCK_CLASS}
-        icon={<RoutineIcon icon={template.icon} className="h-3.5 w-3.5 text-white/85" />}
+        colorTokens={{
+          accent: "bg-white/70",
+          block:
+            "border-[color:var(--block-sleep)] bg-[color:var(--block-sleep)]",
+          ribbon: "bg-[color:var(--block-sleep)]",
+          chip: "bg-white/15 text-white",
+          text: "text-white",
+        }}
+        className="mt-3 px-3 py-2.5 text-white shadow-none hover:translate-y-0 hover:border-[color:var(--block-sleep)] hover:bg-[color:var(--block-sleep)] hover:shadow-none"
         inverse
-      />
+      >
+        <div className="ml-1 flex min-w-0 items-center gap-2.5">
+          <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-md bg-white/10 text-[#f4ecff]">
+            <RoutineIcon icon={template.icon} className="h-3.5 w-3.5" />
+          </span>
+          <span className="shrink-0 rounded-[4px] bg-[oklch(60%_0.18_295)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[10px] font-semibold tracking-[0.04em] text-white">
+            {template.category}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.005em] text-[#f4ecff]">
+            Sleep
+          </span>
+          <span className="shrink-0 font-[family-name:var(--font-mono)] text-[11px] font-medium text-[#c9b8ee]">
+            {formatDuration(sleepTargetMinutes)}
+          </span>
+        </div>
+      </DraggableBlock>
+      <div className="mt-2.5 space-y-1.5 border-t border-dashed border-[oklch(86%_0.04_295)] pt-2.5 dark:border-[oklch(34%_0.08_295)]">
+        <SleepStatusRow
+          label="Last night"
+          task={lastNightSleep}
+          emptyHint="No carryover"
+          onJumpToTask={onJumpToTask}
+        />
+        <SleepStatusRow
+          label="Tonight"
+          task={tonightSleep}
+          emptyHint="Drag the block to schedule"
+          onJumpToTask={onJumpToTask}
+        />
+      </div>
     </div>
+  );
+}
+
+function SleepStatusRow({
+  label,
+  task,
+  emptyHint,
+  onJumpToTask,
+}: {
+  label: string;
+  task?: VisibleTask;
+  emptyHint: string;
+  onJumpToTask: (taskId: string) => void;
+}) {
+  if (!task) {
+    return (
+      <div className="flex items-center gap-2 text-[11.5px] text-[color:var(--ink-3)]">
+        <Clock className="h-3 w-3" aria-hidden="true" />
+        <span className="w-[68px] shrink-0 font-[family-name:var(--font-mono)] uppercase tracking-[0.06em]">
+          {label}
+        </span>
+        <span className="min-w-0 truncate italic">{emptyHint}</span>
+      </div>
+    );
+  }
+
+  const startLabel = formatTimeFromMinutes(task.topMinutes);
+  const endLabel = formatTimeFromMinutes(
+    task.topMinutes + task.visibleDurationMinutes,
+  );
+
+  return (
+    <button
+      type="button"
+      onClick={() => onJumpToTask(task.id)}
+      className="-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-2 rounded-[var(--r-sm)] px-1 py-0.5 text-left text-[11.5px] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+      title={`Jump to ${label.toLowerCase()}'s sleep on the timeline`}
+    >
+      <Clock
+        className="h-3 w-3 text-[color:var(--ink-3)]"
+        aria-hidden="true"
+      />
+      <span className="w-[68px] shrink-0 font-[family-name:var(--font-mono)] uppercase tracking-[0.06em] text-[color:var(--ink-3)]">
+        {label}
+      </span>
+      <span className="font-[family-name:var(--font-mono)] font-semibold tabular-nums text-[color:var(--ink)]">
+        {formatDuration(task.duration_minutes)}
+      </span>
+      <span className="font-[family-name:var(--font-mono)] text-[10.5px] text-[color:var(--ink-3)]">
+        {startLabel}–{endLabel}
+      </span>
+    </button>
   );
 }
 
@@ -4178,18 +5272,24 @@ function Timeline({
   const currentTimeMarker = currentTimeMarkerForDate(dateKey, now);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white dark:bg-zinc-900">
-      <div className="min-h-0 flex-1 overflow-y-scroll pb-32">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--card)]">
+      <div className="min-h-0 flex-1 overflow-y-scroll">
         <div
           ref={setTimelineNode}
           className={cn(
             "relative min-w-[520px] transition-colors",
-            isOver && "bg-indigo-50/30 dark:bg-indigo-500/15",
+            isOver && "bg-[color:var(--sunken)]",
           )}
           style={{ height: TIMELINE_HEIGHT }}
         >
           <TimelineGrid sunTimes={sunTimes} />
-          <div className="absolute inset-y-0 left-[72px] right-6">
+          <div
+            className={cn(
+              "absolute inset-y-0",
+              DAY_TIMELINE_LEFT_CLASS,
+              DAY_TIMELINE_RIGHT_CLASS,
+            )}
+          >
             <PeriodColumnBackground periods={periods} dateKey={dateKey} layout="day" />
           </div>
 
@@ -4197,9 +5297,6 @@ function Timeline({
             <PlacedTask
               key={`${task.storageDateKey}:${task.id}`}
               task={task}
-              hasTopDeadline={deadlines.some(
-                (marker) => marker.topMinutes === task.topMinutes,
-              )}
               updateTask={updateTask}
               deleteTask={deleteTask}
               beginResize={beginResize}
@@ -4214,8 +5311,15 @@ function Timeline({
 }
 
 function TimelineGrid({ sunTimes }: { sunTimes: SunTimes }) {
-  return <TimeGrid gutterWidth={72} labelClassName="px-4 text-[11px]" sunTimes={sunTimes} />;
+  return (
+    <TimeGrid
+      gutterWidth={DAY_TIMELINE_GUTTER_WIDTH}
+      labelClassName="px-2.5 text-[11px]"
+      sunTimes={sunTimes}
+    />
+  );
 }
+
 
 function TimeGrid({
   gutterWidth,
@@ -4233,10 +5337,14 @@ function TimeGrid({
 
   return (
     <div className="absolute inset-0">
+      <div
+        className="pointer-events-none absolute inset-y-0 left-0 bg-timeline-gutter"
+        style={{ width: gutterWidth }}
+      />
       {nightBands.map((band) => (
         <div
           key={`${band.start}-${band.end}`}
-          className="pointer-events-none absolute right-0 border-y border-indigo-100/50 bg-indigo-50/35 dark:border-purple-400/10 dark:bg-purple-950/15"
+          className="pointer-events-none absolute right-0 border-y border-[color:var(--line-soft)] bg-[color:var(--sunken)]/35"
           style={{
             left: gutterWidth,
             top: minutesToPixels(band.start),
@@ -4247,7 +5355,7 @@ function TimeGrid({
       {timelineHours().map((hour) => {
         const minutes = (hour - DAY_START_HOUR) * 60;
         const top = minutesToPixels(minutes);
-        const label = formatTimeFromMinutes(minutes);
+        const label = formatTimelineScaleLabel(minutes);
 
         return (
           <div key={hour} className="absolute left-0 right-0" style={{ top }}>
@@ -4257,13 +5365,14 @@ function TimeGrid({
             >
               <div
                 className={cn(
-                  "-mt-2 font-medium tabular-nums text-zinc-400 dark:text-zinc-500",
+                  "-mt-2.5 font-[family-name:var(--font-mono)] font-semibold uppercase tracking-[0.08em] tabular-nums text-[color:var(--timeline-time)]",
+                  "text-timeline-time",
                   labelClassName,
                 )}
               >
                 {label}
               </div>
-              <div className="border-t border-zinc-100 dark:border-zinc-800" />
+              <div className="border-t border-timeline-line" />
             </div>
           </div>
         );
@@ -4273,7 +5382,7 @@ function TimeGrid({
         return (
           <div
             key={index}
-            className="absolute right-0 border-t border-zinc-100/50 dark:border-zinc-800/50"
+            className="absolute right-0 border-t border-timeline-line/55"
             style={{ top, left: gutterWidth }}
           />
         );
@@ -4318,33 +5427,60 @@ function WeekView({
   beginResize,
 }: WeekViewProps) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white dark:bg-zinc-900">
-      <div className="min-h-0 flex-1 overflow-y-scroll pb-32">
-        <div className="sticky top-0 z-20 grid min-w-[900px] grid-cols-[60px_repeat(7,minmax(110px,1fr))] border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--card)]">
+      <div className="min-h-0 flex-1 overflow-y-scroll">
+        <div className="sticky top-0 z-20 grid min-w-[900px] grid-cols-[60px_repeat(7,minmax(110px,1fr))] border-b border-[color:var(--line)] bg-[color:var(--card)]">
           <div />
           {days.map((day) => {
             const isSelected = day.dateKey === selectedDate;
             const isToday = day.dateKey === todayKey();
+            const dueCount = day.deadlines.length;
+            const hasDueHint = dueCount > 0;
+            const isUrgentDueDay = hasDueHint && day.dateKey <= todayKey();
+            const dueHintTitle = hasDueHint
+              ? [
+                  `${dueCount} item${dueCount === 1 ? "" : "s"} due`,
+                  ...day.deadlines.map(
+                    (marker) => `${marker.timeLabel} - ${marker.title}`,
+                  ),
+                ].join("\n")
+              : undefined;
 
             return (
               <button
                 key={day.dateKey}
                 type="button"
                 className={cn(
-                  "border-l border-zinc-100 dark:border-zinc-800 px-2.5 py-2 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60",
-                  isSelected && "bg-indigo-50/40 dark:bg-indigo-500/15",
+                  "border-l border-[color:var(--line-soft)] px-2.5 py-2 text-left transition-colors hover:bg-[color:var(--sunken)]",
+                  isSelected && "bg-[color:var(--sunken)]",
                 )}
                 onClick={() => setSelectedDate(day.dateKey)}
               >
-                <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                  {new Intl.DateTimeFormat("en-AU", { weekday: "short" }).format(
-                    parseDateKey(day.dateKey),
+                <div className="flex min-w-0 items-center justify-between gap-1.5">
+                  <span className="truncate text-[10px] font-medium uppercase tracking-wider text-[color:var(--ink-3)]">
+                    {new Intl.DateTimeFormat("en-AU", { weekday: "short" }).format(
+                      parseDateKey(day.dateKey),
+                    )}
+                  </span>
+                  {hasDueHint && (
+                    <span
+                      className={cn(
+                        "inline-flex h-4 shrink-0 items-center gap-1 rounded-full border px-1.5 font-[family-name:var(--font-mono)] text-[9.5px] font-semibold leading-none",
+                        isUrgentDueDay
+                          ? "border-rose-200 bg-rose-100 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/20 dark:text-rose-200"
+                          : "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/20 dark:text-amber-200",
+                      )}
+                      title={dueHintTitle}
+                    >
+                      <Flag className="h-2.5 w-2.5" aria-hidden="true" />
+                      {dueCount}
+                    </span>
                   )}
                 </div>
                 <div
                   className={cn(
-                    "mt-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100",
-                    isToday && "bg-indigo-600 text-white",
+                    "mt-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-sm font-semibold tabular-nums text-[color:var(--ink)]",
+                    isToday && "bg-[color:var(--ink)] !text-[color:var(--card)]",
                   )}
                 >
                   {formatDayNumber(day.dateKey)}
@@ -4357,7 +5493,7 @@ function WeekView({
           ref={setTimelineNode}
           className={cn(
             "relative min-w-[900px] transition-colors",
-            isOver && "bg-indigo-50/30 dark:bg-indigo-500/15",
+            isOver && "bg-[color:var(--sunken)]",
           )}
           style={{ height: TIMELINE_HEIGHT }}
         >
@@ -4367,7 +5503,7 @@ function WeekView({
             {days.map((day) => (
               <div
                 key={day.dateKey}
-                className="relative border-l border-zinc-100 dark:border-zinc-800"
+                className="relative border-l border-[color:var(--line-soft)]"
               >
                 <PeriodColumnBackground
                   periods={periods}
@@ -4419,12 +5555,12 @@ function MonthView({
   const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-white dark:bg-zinc-900 p-4">
-      <div className="grid grid-cols-7 overflow-hidden rounded-lg border border-l border-zinc-200 dark:border-zinc-800">
+    <section className="min-h-0 flex-1 overflow-y-auto bg-[color:var(--card)] p-4">
+      <div className="grid grid-cols-7 overflow-hidden rounded-lg border border-l border-[color:var(--line)]">
         {weekLabels.map((label) => (
           <div
             key={label}
-            className="border-b border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/60 px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500"
+            className="border-b border-r border-[color:var(--line)] bg-[color:var(--sunken)] px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-[color:var(--ink-3)]"
           >
             {label}
           </div>
@@ -4454,9 +5590,9 @@ function MonthView({
               key={day.dateKey}
               type="button"
               className={cn(
-                "relative min-h-28 overflow-visible border-b border-r border-zinc-100 dark:border-zinc-800 p-2 text-left align-top transition-colors hover:z-20 hover:bg-zinc-50 dark:hover:bg-zinc-800/60/60 dark:hover:bg-zinc-800/60",
-                !inMonth && "bg-zinc-50/40 dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-500",
-                isSelected && "ring-1 ring-inset ring-indigo-400 z-10",
+                "relative min-h-28 overflow-visible border-b border-r border-[color:var(--line-soft)] p-2 text-left align-top transition-colors hover:z-20 hover:bg-[color:var(--sunken)]/60",
+                !inMonth && "bg-[color:var(--sunken)] text-[color:var(--ink-3)]",
+                isSelected && "z-10 ring-1 ring-inset ring-[color:var(--ring)]",
               )}
               onClick={() => setSelectedDate(day.dateKey)}
               onDoubleClick={() => {
@@ -4482,8 +5618,8 @@ function MonthView({
                         title={periodHoverTitle(period)}
                       >
                         <div className={cn("h-1.5 rounded-sm", tokens.ribbon)} />
-                        <div className="pointer-events-none absolute left-1 top-2 z-50 hidden w-60 rounded-lg border border-zinc-200 bg-white/95 p-2.5 text-left text-[11px] text-zinc-600 shadow-xl shadow-zinc-900/15 backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-300 group-hover/period-ribbon:block">
-                          <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-semibold text-zinc-900 dark:text-zinc-100">
+                        <div className="pointer-events-none absolute left-1 top-2 z-50 hidden w-60 rounded-[var(--r)] border border-[color:var(--line)] bg-[color:var(--card)]/95 p-2.5 text-left text-[11px] text-[color:var(--ink-2)] shadow-[0_18px_40px_-18px_rgba(20,18,10,0.32)] backdrop-blur group-hover/period-ribbon:block">
+                          <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-semibold text-[color:var(--ink)]">
                             <span className={cn("h-2 w-2 shrink-0 rounded-full", tokens.accent)} />
                             <span className="truncate">{period.title}</span>
                           </div>
@@ -4493,7 +5629,7 @@ function MonthView({
                             <div>{details.days}</div>
                             {details.breaks && <div>{details.breaks}</div>}
                             {details.notes && (
-                              <div className="mt-1 line-clamp-2 text-zinc-500 dark:text-zinc-400">
+                              <div className="mt-1 line-clamp-2 text-[color:var(--ink-2)]">
                                 {details.notes}
                               </div>
                             )}
@@ -4508,10 +5644,10 @@ function MonthView({
                 className={cn(
                   "relative mb-1 mt-2 inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums",
                   isToday
-                    ? "bg-indigo-600 text-white"
+                    ? "bg-[color:var(--ink)] !text-[color:var(--card)]"
                     : inMonth
-                      ? "text-zinc-700 dark:text-zinc-300"
-                      : "text-zinc-400 dark:text-zinc-500",
+                      ? "text-[color:var(--ink-2)]"
+                      : "text-[color:var(--ink-3)]",
                 )}
               >
                 {formatDayNumber(day.dateKey)}
@@ -4526,9 +5662,12 @@ function MonthView({
                     <div
                       key={`${task.storageDateKey}:${task.id}`}
                       className={cn(
-                        "truncate rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-700 dark:text-zinc-300",
+                        "truncate rounded px-1.5 py-0.5 text-[11px] font-medium text-[color:var(--ink-2)]",
                         styles.block,
-                        task.kind === "calendar" && CALENDAR_BLOCK_CLASS,
+                        task.kind === "calendar" &&
+                          (task.displayIsEvent
+                            ? EVENT_BLOCK_CLASS
+                            : CALENDAR_BLOCK_CLASS),
                         task.kind === "sleep" && SLEEP_MONTH_BLOCK_CLASS,
                       )}
                       title={monthTaskHoverTitle(task)}
@@ -4538,7 +5677,7 @@ function MonthView({
                           "mr-1 tabular-nums",
                           task.kind === "sleep"
                             ? "text-white/65"
-                            : "text-zinc-400 dark:text-zinc-500",
+                            : "text-[color:var(--ink-3)]",
                         )}
                       >
                         {formatTimeFromMinutes(task.topMinutes)}
@@ -4559,7 +5698,7 @@ function MonthView({
                 {visibleDeadlines.map((marker) => (
                   <div
                     key={marker.id}
-                    className="flex items-center gap-1 truncate rounded border border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 px-1.5 py-0.5 text-[11px] font-medium text-rose-700 dark:text-rose-300"
+                    className="flex items-center gap-1 truncate rounded border border-[oklch(82%_0.08_25)] bg-[oklch(95%_0.04_25)] px-1.5 py-0.5 text-[11px] font-medium text-[oklch(55%_0.18_25)] dark:border-[oklch(45%_0.12_25)] dark:bg-[oklch(28%_0.08_25)] dark:text-[oklch(78%_0.12_25)]"
                     title={deadlineHoverTitle(marker)}
                   >
                     <Flag className="h-3 w-3 shrink-0" />
@@ -4570,7 +5709,7 @@ function MonthView({
                   </div>
                 ))}
                 {hiddenCount > 0 && (
-                  <div className="px-1.5 text-[10px] font-medium text-zinc-400 dark:text-zinc-500">
+                  <div className="px-1.5 text-[10px] font-medium text-[color:var(--ink-3)]">
                     +{hiddenCount} more
                   </div>
                 )}
@@ -4678,23 +5817,61 @@ function DeadlineMarkers({
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
       {markers.map((marker) => {
-        const styles = categoryTokens(marker.category);
         const top = minutesToPixels(marker.topMinutes) + marker.stackIndex * 22;
+        const tooltip = `${marker.title} deadline at ${marker.timeLabel}${marker.hasExplicitTime ? "" : " (no time set)"}`;
+
+        if (layout === "day") {
+          return (
+            <div
+              key={marker.id}
+              className="absolute left-0 right-8"
+              style={{ top }}
+              title={tooltip}
+            >
+              <div
+                className="absolute right-0 top-0 border-t-2 border-dashed border-[oklch(62%_0.20_25)] dark:border-[oklch(70%_0.16_25)]"
+                style={{ left: DAY_TIMELINE_CONTENT_LEFT }}
+              />
+              <span
+                className="absolute top-0 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[color:var(--card)] bg-[oklch(58%_0.22_25)] shadow-[0_0_0_3px_rgba(244,63,94,0.16)] dark:bg-[oklch(70%_0.18_25)]"
+                style={{ left: DAY_TIMELINE_CONTENT_LEFT }}
+              />
+              <div
+                className="absolute top-0 flex min-w-0 -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-[oklch(82%_0.09_25)] bg-[oklch(96%_0.04_25)] px-2.5 py-1 text-[11px] font-semibold leading-none text-[oklch(48%_0.20_25)] shadow-sm ring-1 ring-white/70 backdrop-blur dark:border-[oklch(48%_0.13_25)] dark:bg-[oklch(27%_0.08_25)] dark:text-[oklch(82%_0.12_25)]"
+                style={{
+                  left: `calc(${DAY_TIMELINE_CONTENT_LEFT}px + (100% - ${DAY_TIMELINE_CONTENT_LEFT}px) / 2)`,
+                  maxWidth: `calc(100% - ${DAY_TIMELINE_CONTENT_LEFT + 170}px)`,
+                }}
+              >
+                <Flag className="h-3.5 w-3.5 shrink-0" />
+                <span className="shrink-0 font-[family-name:var(--font-mono)] text-[10px] font-bold uppercase tracking-[0.08em]">
+                  Due {marker.timeLabel}
+                </span>
+                <span className="h-3 w-px shrink-0 bg-[oklch(82%_0.09_25)] dark:bg-[oklch(48%_0.13_25)]" />
+                <span className="min-w-0 truncate">
+                  {marker.title}
+                </span>
+              </div>
+            </div>
+          );
+        }
+
+        const styles = categoryTokens(marker.category);
 
         return (
           <div
             key={marker.id}
             className={cn(
               "absolute",
-              layout === "week" ? "left-1 right-1" : "left-[80px] right-6",
+              "left-1 right-1",
             )}
             style={{ top }}
-            title={`${marker.title} deadline at ${marker.timeLabel}${marker.hasExplicitTime ? "" : " (no time set)"}`}
+            title={tooltip}
           >
-            <div className="absolute left-0 right-0 top-0 border-t border-dashed border-rose-300 dark:border-rose-500/40" />
+            <div className="absolute left-0 right-0 top-0 border-t border-dashed border-[oklch(76%_0.12_25)] dark:border-[oklch(55%_0.14_25)]" />
             <div
               className={cn(
-                "inline-flex max-w-full -translate-y-1/2 items-center gap-1.5 rounded-md border border-rose-200 dark:border-rose-500/30 bg-white/95 dark:bg-zinc-900/95 px-2 py-1 text-[10px] font-medium text-rose-700 dark:text-rose-300 shadow-sm backdrop-blur",
+                "inline-flex max-w-full -translate-y-1/2 items-center gap-1.5 rounded-md border border-[oklch(82%_0.08_25)] bg-[color:var(--card)]/95 px-2 py-1 text-[10px] font-medium text-[oklch(55%_0.18_25)] shadow-sm backdrop-blur",
                 layout === "week" && "px-1.5",
               )}
             >
@@ -4706,7 +5883,6 @@ function DeadlineMarkers({
                 {marker.category}
               </span>
               <span className="truncate">
-                {layout === "day" ? "Deadline: " : ""}
                 {marker.title}
               </span>
             </div>
@@ -4743,14 +5919,18 @@ function CurrentTimeLine({
 
   return (
     <div
-      className="pointer-events-none absolute left-[72px] right-6 z-40 flex -translate-y-1/2 items-center"
+      className={cn(
+        "pointer-events-none absolute z-40 flex -translate-y-1/2 items-center",
+        DAY_TIMELINE_LEFT_CLASS,
+        DAY_TIMELINE_RIGHT_CLASS,
+      )}
       style={{ top }}
       aria-label={`Current time ${marker.label}`}
     >
       <span className="h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_0_2px_rgba(244,63,94,0.18)] dark:bg-rose-400" />
       <span className="h-px flex-1 bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.16)] dark:bg-rose-400" />
       <div className="absolute right-0 translate-x-[70%]">
-        <span className="inline-flex rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white shadow-sm dark:bg-rose-400 dark:text-zinc-950">
+        <span className="inline-flex rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white shadow-sm dark:bg-rose-400 dark:text-[color:var(--card)]">
           {marker.label}
         </span>
       </div>
@@ -4786,12 +5966,13 @@ function PlacedTask({
   );
   const mutedTextClass = isSleep
     ? "text-white/70"
-    : "text-zinc-500 dark:text-zinc-400";
+    : "text-[color:var(--ink-2)]";
   const titleTextClass = isSleep
     ? "text-white"
-    : "text-zinc-900 dark:text-zinc-100";
+    : "text-[color:var(--ink)]";
   const inlineIconClass = cn(
-    "h-3.5 w-3.5 shrink-0",
+    "shrink-0",
+    isWeekLayout ? "h-3.5 w-3.5" : "h-4 w-4",
     isSleep ? "text-white/85" : styles.text,
   );
   const inlineIcon = task.displayIcon ? (
@@ -4805,17 +5986,60 @@ function PlacedTask({
   ) : (
     <Zap className={inlineIconClass} />
   );
+  const routeLabel =
+    task.commute_estimate || task.commute_config
+      ? compactRouteLabel(
+          (task.commute_estimate ?? task.commute_config)!.origin,
+          (task.commute_estimate ?? task.commute_config)!.destination,
+        )
+      : null;
+  // For cross-midnight blocks (most often sleep), the visible top edge is
+  // 00:00 of the displayed day, which hides the fact that the block actually
+  // started yesterday. Surface the real start in the hover title so users
+  // aren't confused by a sleep block "starting at 00:00".
+  let carryoverHint: string | null = null;
+  if (task.continuesBefore && task.start_time) {
+    const startedAt = new Date(task.start_time);
+    if (!Number.isNaN(startedAt.getTime())) {
+      const hh = String(startedAt.getHours()).padStart(2, "0");
+      const mm = String(startedAt.getMinutes()).padStart(2, "0");
+      carryoverHint = `Started ${formatDayLabel(task.storageDateKey)} at ${hh}:${mm}`;
+    }
+  }
+
+  const taskHoverTitle = [
+    `${task.title} (${startLabel} - ${endLabel})`,
+    carryoverHint,
+    task.commute_estimate
+      ? `${compactRouteLabel(
+          task.commute_estimate.origin,
+          task.commute_estimate.destination,
+        )}\n${commuteModeLabel(task.commute_estimate.mode)} - ${formatDuration(
+          task.commute_estimate.travel_duration_minutes,
+        )} travel + ${formatDuration(task.commute_estimate.buffer_minutes)} buffer`
+      : routeLabel
+        ? `${routeLabel}\nCommute details saved, estimate pending`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div
+      // `data-task-id` is the jump target for rail status rows (e.g.
+      // SleepControl "Tonight" / "Last night" rows scroll-to here).
+      data-task-id={task.id}
       className={cn(
         "group absolute",
-        layout === "week" ? "left-1 right-1" : "left-[80px] right-6",
+        layout === "week"
+          ? "left-1 right-1"
+          : [DAY_TIMELINE_LEFT_CLASS, DAY_TIMELINE_RIGHT_CLASS],
       )}
       style={{
         top,
         height,
       }}
+      title={taskHoverTitle}
     >
       {!isLocked && (
         <button
@@ -4827,6 +6051,23 @@ function PlacedTask({
             event.stopPropagation();
             beginResize(task, event.clientY, "top");
           }}
+        />
+      )}
+      {task.displayDurationUncertain && (
+        // Bottom-fade overlay: communicates "this duration is a guess, not
+        // a contract". Sits over the lower portion of the block, fading the
+        // calendar-tinted background toward the timeline bg. pointer-events-
+        // none so it never swallows clicks; below the resize handle (z-20)
+        // so that handle still works if the block is ever unlocked.
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] rounded-b-[inherit]"
+          style={{
+            height: "45%",
+            background:
+              "linear-gradient(to bottom, transparent 0%, var(--card) 88%)",
+          }}
+          title="Duration is uncertain"
         />
       )}
       <DraggableBlock
@@ -4847,9 +6088,10 @@ function PlacedTask({
         }}
         className={cn(
           "h-full overflow-hidden",
-          isWeekLayout ? "pr-1.5" : "pr-8",
-          hasTopDeadline ? "pb-1.5 pt-5" : "py-1.5",
-          task.kind === "calendar" && CALENDAR_BLOCK_CLASS,
+          isWeekLayout ? "pr-1.5" : "px-4 pr-5",
+          hasTopDeadline ? "pb-2 pt-6" : isWeekLayout ? "py-1.5" : "py-2.5",
+          task.kind === "calendar" &&
+            (task.displayIsEvent ? EVENT_BLOCK_CLASS : CALENDAR_BLOCK_CLASS),
           isSleep && SLEEP_BLOCK_CLASS,
           isContinuation && "border-dashed",
           isLocked && "cursor-default",
@@ -4857,12 +6099,6 @@ function PlacedTask({
       >
         {isWeekLayout ? (
           <div className="flex min-w-0 items-center gap-1 leading-none">
-            {isLocked && (
-              <Lock
-                aria-hidden="true"
-                className={cn("h-2.5 w-2.5 shrink-0", mutedTextClass)}
-              />
-            )}
             <span
               className={cn(
                 "shrink-0 text-[9px] font-medium tabular-nums",
@@ -4881,11 +6117,11 @@ function PlacedTask({
             </span>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-2 leading-none">
-            <div className="flex min-w-0 items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-3 leading-none">
+            <div className="flex min-w-0 items-center gap-2.5">
               <span
                 className={cn(
-                  "shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide",
+                  "shrink-0 rounded-[5px] px-1.5 py-1 font-[family-name:var(--font-mono)] text-[10.5px] font-bold leading-none tracking-[0.04em]",
                   isSleep ? "bg-white/15 text-white" : styles.chip,
                 )}
               >
@@ -4896,7 +6132,7 @@ function PlacedTask({
               </span>
               <span
                 className={cn(
-                  "min-w-0 truncate text-[11px] font-semibold",
+                  "min-w-0 truncate text-[16px] font-bold leading-none tracking-[-0.01em]",
                   titleTextClass,
                 )}
               >
@@ -4904,96 +6140,63 @@ function PlacedTask({
               </span>
               <span
                 className={cn(
-                  "inline-flex shrink-0 items-center gap-1 text-[10px] font-medium",
+                  "inline-flex shrink-0 items-center gap-1 text-[12.5px] font-medium leading-none",
                   mutedTextClass,
                 )}
               >
-                <Clock className="h-3 w-3" aria-hidden="true" />
+                {task.commute_estimate || task.commuteEnabled ? (
+                  <Navigation className="h-3 w-3" aria-hidden="true" />
+                ) : (
+                  <Clock className="h-3 w-3" aria-hidden="true" />
+                )}
                 {formatDuration(task.duration_minutes)}
               </span>
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <span
                 className={cn(
-                  "shrink-0 text-[10px] font-medium tabular-nums",
+                  "shrink-0 font-[family-name:var(--font-mono)] text-[12px] font-semibold tracking-[0.06em] tabular-nums",
                   mutedTextClass,
                 )}
               >
                 {startLabel} - {endLabel}
               </span>
-              {task.kind === "calendar" ? (
-                <span
-                  className={cn(
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                    isSleep
-                      ? "border-white/25 bg-white/10 text-white/75"
-                      : "border-zinc-200 bg-white/75 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900/75 dark:text-zinc-500",
-                  )}
-                  title="Fixed block"
-                >
-                  <Lock className="h-2.5 w-2.5" />
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className={cn(
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border shadow-sm transition-colors",
-                    isSleep
-                      ? "border-white/30 bg-white/10 text-white hover:border-white/50"
-                      : "border-zinc-300 bg-white/80 text-zinc-500 hover:border-zinc-400 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-100",
-                    task.status === "completed" &&
-                      "border-indigo-500 bg-indigo-500 text-white hover:border-indigo-600 hover:bg-indigo-600 hover:text-white dark:hover:border-indigo-400",
-                  )}
-                  title={
-                    task.status === "completed"
-                      ? "Mark pending"
-                      : "Mark completed"
-                  }
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onDoubleClick={(event) => event.stopPropagation()}
-                  onClick={() =>
-                    updateTask(task, task.storageDateKey, {
-                      status:
-                        task.status === "completed" ? "pending" : "completed",
-                    })
-                  }
-                >
-                  <Check
-                    className={cn(
-                      "h-2.5 w-2.5",
-                      task.status !== "completed" && "opacity-0",
-                    )}
-                    strokeWidth={3}
-                  />
-                </button>
-              )}
             </div>
           </div>
         )}
       </DraggableBlock>
       {!isLocked && (
-        <>
-          <button
-            type="button"
-            className="absolute right-1.5 top-1.5 z-20 flex h-5 w-5 items-center justify-center rounded bg-white/90 dark:bg-zinc-900/90 text-zinc-400 dark:text-zinc-500 opacity-0 shadow-sm backdrop-blur transition-all hover:text-rose-600 dark:hover:text-rose-400 group-hover:opacity-100"
-            title="Delete block"
-            onClick={() => deleteTask(task)}
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            className="absolute bottom-0.5 left-1/2 z-20 flex h-4 w-12 -translate-x-1/2 cursor-ns-resize items-center justify-center rounded bg-white/85 dark:bg-zinc-900/85 text-zinc-400 dark:text-zinc-500 opacity-0 shadow-sm backdrop-blur transition-all hover:text-zinc-700 dark:hover:text-zinc-200 group-hover:opacity-100"
-            title="Resize duration"
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              beginResize(task, event.clientY, "bottom");
-            }}
-          >
-            <MoveVertical className="h-3 w-3" />
-          </button>
-        </>
+        <button
+          type="button"
+          className="absolute bottom-0.5 left-1/2 z-20 flex h-4 w-12 -translate-x-1/2 cursor-ns-resize items-center justify-center rounded bg-[color:var(--card)]/85 text-[color:var(--ink-3)] opacity-0 shadow-sm backdrop-blur transition-all hover:text-[color:var(--ink)] group-hover:opacity-100"
+          title="Resize duration"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            beginResize(task, event.clientY, "bottom");
+          }}
+        >
+          <MoveVertical className="h-3 w-3" />
+        </button>
+      )}
+      {task.displayIsActualSleep && (
+        <button
+          type="button"
+          className="absolute right-1 top-1 z-20 inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/15 text-white/85 opacity-0 backdrop-blur transition-all hover:bg-white/30 hover:text-white group-hover:opacity-100"
+          title="Remove this imported sleep record (will return on next HAE sync)"
+          onPointerDown={(event) => {
+            // Synthetic block is locked, so DraggableBlock won't grab the
+            // pointer here, but stop propagation anyway for safety.
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            deleteTask(task);
+          }}
+        >
+          <X className="h-3 w-3" />
+        </button>
       )}
       {isEditing && canEdit && (
         <PlacedTaskEditor
@@ -5001,6 +6204,10 @@ function PlacedTask({
           onCancel={() => setIsEditing(false)}
           onSave={(values) => {
             updateTask(task, task.storageDateKey, values);
+            setIsEditing(false);
+          }}
+          onDelete={() => {
+            deleteTask(task);
             setIsEditing(false);
           }}
         />
@@ -5013,10 +6220,12 @@ function PlacedTaskEditor({
   task,
   onCancel,
   onSave,
+  onDelete,
 }: {
   task: VisibleTask;
   onCancel: () => void;
   onSave: (values: Partial<Task>) => void;
+  onDelete: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [category, setCategory] = useState<Category>(task.category);
@@ -5030,6 +6239,34 @@ function PlacedTaskEditor({
   const [endTime, setEndTime] = useState(
     formatTimeFromMinutes(startOffsetMinutes + task.duration_minutes),
   );
+  const initialCommuteConfig =
+    task.commute_config ??
+    (task.commute_estimate
+      ? commuteConfigFromEstimate(task.commute_estimate)
+      : null);
+  const canConfigureCommute = Boolean(
+    task.commuteEnabled || initialCommuteConfig || task.commute_estimate,
+  );
+  const [commuteOrigin, setCommuteOrigin] = useState(
+    initialCommuteConfig?.origin ?? "",
+  );
+  const [commuteDestination, setCommuteDestination] = useState(
+    initialCommuteConfig?.destination ?? "",
+  );
+  const [commuteMode, setCommuteMode] = useState<CommuteMode>(
+    initialCommuteConfig?.mode ?? "driving-traffic",
+  );
+  const [commuteBuffer, setCommuteBuffer] = useState(
+    initialCommuteConfig?.buffer_minutes ?? 10,
+  );
+  const [commuteTimeStrategy, setCommuteTimeStrategy] =
+    useState<CommuteTimeStrategy>(
+      initialCommuteConfig?.time_strategy ?? "depart_at_start",
+    );
+  const [commuteEstimate, setCommuteEstimate] =
+    useState<CommuteEstimate | null>(task.commute_estimate);
+  const [isEstimatingCommute, setIsEstimatingCommute] = useState(false);
+  const [commuteError, setCommuteError] = useState<string | null>(null);
 
   const editedStartMinutes = startTime
     ? wallTimeToTimelineMinutes(startTime)
@@ -5045,6 +6282,26 @@ function PlacedTaskEditor({
       Math.round(editedEndMinutes - editedStartMinutes),
     ),
   );
+  const editedCommuteConfig: CommuteConfig | null =
+    canConfigureCommute && commuteOrigin.trim() && commuteDestination.trim()
+      ? {
+          origin: commuteOrigin.trim(),
+          destination: commuteDestination.trim(),
+          mode: commuteMode,
+          buffer_minutes: Math.max(
+            0,
+            Math.min(240, Math.round(commuteBuffer) || 0),
+          ),
+          time_strategy: commuteTimeStrategy,
+          provider: "mapbox",
+        }
+      : null;
+  const savedCommuteEstimate = commuteEstimateMatchesConfig(
+    commuteEstimate,
+    editedCommuteConfig,
+  )
+    ? commuteEstimate
+    : null;
 
   const save = () => {
     onSave({
@@ -5055,95 +6312,225 @@ function PlacedTaskEditor({
         editedStartMinutes,
       ),
       duration_minutes: editedDurationMinutes,
+      commute_config: editedCommuteConfig,
+      commute_estimate: savedCommuteEstimate,
     });
+  };
+  const recalculateCommute = async () => {
+    if (!editedCommuteConfig) {
+      setCommuteError("Add both departure and arrival addresses first.");
+      return;
+    }
+    setIsEstimatingCommute(true);
+    setCommuteError(null);
+    try {
+      const nextEstimate = await estimateCommute(editedCommuteConfig);
+      setCommuteEstimate(nextEstimate);
+      if (editedCommuteConfig.time_strategy === "arrive_by_end") {
+        const nextStart = clampNumber(
+          editedEndMinutes - nextEstimate.duration_minutes,
+          0,
+          Math.max(0, TOTAL_MINUTES - 1),
+        );
+        setStartTime(formatTimeFromMinutes(nextStart));
+      } else {
+        const nextEnd = clampNumber(
+          editedStartMinutes + nextEstimate.duration_minutes,
+          1,
+          TOTAL_MINUTES,
+        );
+        setEndTime(formatTimeFromMinutes(nextEnd));
+      }
+    } catch (error) {
+      setCommuteError(
+        error instanceof Error ? error.message : "Unable to estimate commute.",
+      );
+    } finally {
+      setIsEstimatingCommute(false);
+    }
   };
 
   return (
-    <div
-      className="absolute left-0 top-[calc(100%+0.375rem)] z-50 w-72 rounded-lg border border-zinc-200 bg-white p-3 text-left shadow-xl shadow-zinc-900/15 dark:border-zinc-800 dark:bg-zinc-950"
-      onDoubleClick={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onCancel();
-        }
-      }}
-    >
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
-          Edit block
-        </div>
-        <div className="text-[10px] font-medium text-zinc-400 dark:text-zinc-500">
-          {formatTimeFromMinutes(task.topMinutes)}
-        </div>
-      </div>
-
-      <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-        Title
-        <input
-          autoFocus
-          className={BLOCK_EDITOR_INPUT_CLASS}
-          value={title}
-          placeholder="Block title"
-          onChange={(event) => setTitle(event.target.value)}
+    <EditorModal onClose={onCancel}>
+      <div className={EDITOR_CARD_CLASS}>
+        <EditorHeader
+          eyebrow="Edit block"
+          title={title.trim() || task.title}
+          meta={[
+            `Tier ${category}`,
+            `${startTime || "--:--"} - ${endTime || "--:--"}`,
+            formatEditorDuration(editedDurationMinutes),
+          ]}
+          onCancel={onCancel}
         />
-      </label>
 
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-          Category
-          <select
-            className={BLOCK_EDITOR_INPUT_CLASS}
-            value={category}
-            onChange={(event) => setCategory(event.target.value as Category)}
-          >
-            {CATEGORY_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
+      <div className={EDITOR_BODY_CLASS}>
+        <label className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Title</span>
+          <input
+            autoFocus
+            className={EDITOR_PLAIN_INPUT_CLASS}
+            value={title}
+            placeholder="Block title"
+            onChange={(event) => setTitle(event.target.value)}
+          />
         </label>
-        <div className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-          Duration
-          <div className="mt-1 flex h-8 items-center rounded-md border border-zinc-200 bg-zinc-50 px-2 text-xs font-semibold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-            {formatDuration(editedDurationMinutes)}
+        <div className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Tier</span>
+          <EditorTierSegment value={category} onChange={setCategory} />
+        </div>
+        <div className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Window</span>
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+            <input
+              className={cn(EDITOR_INPUT_CLASS, "font-mono")}
+              type="time"
+              step={60}
+              value={startTime}
+              onChange={(event) => setStartTime(event.target.value)}
+            />
+            <span className="font-mono text-[color:var(--ink-3)]">
+              {"->"}
+            </span>
+            <input
+              className={cn(EDITOR_INPUT_CLASS, "font-mono")}
+              type="time"
+              step={60}
+              value={endTime}
+              onChange={(event) => setEndTime(event.target.value)}
+            />
           </div>
         </div>
+        <div className={EDITOR_ROW_CLASS}>
+          <span className={EDITOR_LABEL_CLASS}>Duration</span>
+          <div className="inline-grid w-fit grid-cols-[3.25rem_auto_3.25rem_auto] items-center gap-1">
+            <input
+              className={cn(EDITOR_INPUT_CLASS, "font-mono text-center")}
+              readOnly
+              value={Math.floor(editedDurationMinutes / 60)}
+            />
+            <span className="font-mono text-[12px] text-[color:var(--ink-3)]">
+              h
+            </span>
+            <input
+              className={cn(EDITOR_INPUT_CLASS, "font-mono text-center")}
+              readOnly
+              value={String(editedDurationMinutes % 60).padStart(2, "0")}
+            />
+            <span className="font-mono text-[12px] text-[color:var(--ink-3)]">
+              m
+            </span>
+          </div>
+        </div>
+        {canConfigureCommute && (
+          <div className={EDITOR_ROW_CLASS}>
+            <span className={EDITOR_LABEL_CLASS}>Commute</span>
+            <div className="min-w-0 space-y-2">
+              <div className="grid gap-2">
+                <input
+                  className={EDITOR_INPUT_CLASS}
+                  placeholder="Departure address"
+                  value={commuteOrigin}
+                  onChange={(event) => {
+                    setCommuteOrigin(event.target.value);
+                    setCommuteEstimate(null);
+                  }}
+                />
+                <input
+                  className={EDITOR_INPUT_CLASS}
+                  placeholder="Arrival address"
+                  value={commuteDestination}
+                  onChange={(event) => {
+                    setCommuteDestination(event.target.value);
+                    setCommuteEstimate(null);
+                  }}
+                />
+                <div className="grid grid-cols-[1fr_1fr_5rem] gap-2">
+                  <select
+                    className={EDITOR_INPUT_CLASS}
+                    value={commuteMode}
+                    onChange={(event) => {
+                      setCommuteMode(event.target.value as CommuteMode);
+                      setCommuteEstimate(null);
+                    }}
+                  >
+                    {COMMUTE_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {commuteModeLabel(mode)}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={EDITOR_INPUT_CLASS}
+                    value={commuteTimeStrategy}
+                    onChange={(event) =>
+                      setCommuteTimeStrategy(
+                        event.target.value as CommuteTimeStrategy,
+                      )
+                    }
+                  >
+                    {COMMUTE_TIME_STRATEGIES.map((strategy) => (
+                      <option key={strategy} value={strategy}>
+                        {commuteTimeStrategyLabel(strategy)}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className={cn(EDITOR_INPUT_CLASS, "text-center font-mono")}
+                    min={0}
+                    max={240}
+                    step={5}
+                    type="number"
+                    value={commuteBuffer}
+                    title="Buffer minutes"
+                    onChange={(event) => {
+                      setCommuteBuffer(Number(event.target.value));
+                      setCommuteEstimate(null);
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {commuteEstimate && (
+                  <>
+                    <span className="rounded bg-[color:var(--sunken)] px-2 py-1 font-[family-name:var(--font-mono)] text-[10px] font-semibold text-[color:var(--ink-2)]">
+                      {formatDuration(commuteEstimate.travel_duration_minutes)} travel
+                    </span>
+                    <span className="rounded bg-[color:var(--sunken)] px-2 py-1 font-[family-name:var(--font-mono)] text-[10px] font-semibold text-[color:var(--ink-2)]">
+                      {formatDuration(commuteEstimate.duration_minutes)} total
+                    </span>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="inline-flex h-7 items-center justify-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 text-[11px] font-semibold text-[color:var(--ink)] transition-colors hover:bg-[color:var(--sunken)] disabled:opacity-50"
+                  onClick={recalculateCommute}
+                  disabled={isEstimatingCommute}
+                >
+                  {isEstimatingCommute ? "Estimating" : "Recalculate"}
+                </button>
+              </div>
+              <p className="text-[11px] leading-snug text-[color:var(--ink-3)]">
+                Depart mode adjusts the end time from the block start. Arrive
+                mode adjusts the start time from the block end.
+              </p>
+              {commuteError && (
+                <p className="text-[11px] leading-snug text-[oklch(55%_0.18_25)]">
+                  {commuteError}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-          Start
-          <input
-            className={BLOCK_EDITOR_INPUT_CLASS}
-            type="time"
-            step={60}
-            value={startTime}
-            onChange={(event) => setStartTime(event.target.value)}
-          />
-        </label>
-        <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-          End
-          <input
-            className={BLOCK_EDITOR_INPUT_CLASS}
-            type="time"
-            step={60}
-            value={endTime}
-            onChange={(event) => setEndTime(event.target.value)}
-          />
-        </label>
+        <EditorFooter
+          onDelete={onDelete}
+          onCancel={onCancel}
+          onSubmit={save}
+          submitLabel="Save"
+        />
       </div>
-
-      <div className="mt-3 flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="button" variant="primary" size="sm" onClick={save}>
-          Save
-        </Button>
-      </div>
-    </div>
+    </EditorModal>
   );
 }

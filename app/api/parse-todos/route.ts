@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import type {
   ParsedTodoCandidate,
   ParseTodosRequest,
@@ -6,6 +6,9 @@ import type {
   TodoParserListContext,
 } from "@/lib/ai-todo-parser";
 import type { Category } from "@/lib/schema";
+import { cleanEnvValue } from "@/lib/server/env";
+import { isSameOrigin } from "@/lib/server/http";
+import { getServerUser } from "@/lib/server/supabase-user";
 
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.cn/v1";
 const DEFAULT_MODEL = "kimi-k2.6";
@@ -60,6 +63,17 @@ function normalizeTags(value: unknown) {
     .slice(0, 8);
 }
 
+function normalizeKind(value: unknown): "task" | "event" {
+  return value === "event" ? "event" : "task";
+}
+
+function normalizeDurationMinutes(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value <= 0) return null;
+  // Sanity cap: nobody schedules a 16h meeting; clamp to a day.
+  return Math.min(24 * 60, Math.max(5, Math.round(value)));
+}
+
 function normalizeTodos(value: unknown): ParsedTodoCandidate[] {
   if (!Array.isArray(value)) return [];
 
@@ -70,13 +84,33 @@ function normalizeTodos(value: unknown): ParsedTodoCandidate[] {
       const title = normalizeTitle(row.title);
       if (!title) return null;
 
+      const dueDate = isDateKey(row.dueDate) ? row.dueDate : null;
+      const dueTime = isTimeLabel(row.dueTime) ? row.dueTime : null;
+      // Demote to task if the model said "event" but there's no actual time
+      // anchor — events without when don't make sense.
+      const claimedKind = normalizeKind(row.kind);
+      const kind: "task" | "event" =
+        claimedKind === "event" && dueDate && dueTime ? "event" : "task";
+      const explicitDuration = normalizeDurationMinutes(row.durationMinutes);
+      const durationMinutes =
+        kind === "event" ? (explicitDuration ?? 60) : null;
+      // Mark uncertain when the model told us so, OR when it couldn't give
+      // a concrete duration and we fell back to 60. The latter catch is
+      // defensive — older model versions may not emit the flag yet.
+      const durationUncertain =
+        kind === "event" &&
+        (row.durationUncertain === true || explicitDuration === null);
+
       return {
         title,
         listName: normalizeListName(row.listName),
         category: normalizeCategory(row.category),
-        dueDate: isDateKey(row.dueDate) ? row.dueDate : null,
-        dueTime: isTimeLabel(row.dueTime) ? row.dueTime : null,
+        dueDate,
+        dueTime,
         tags: normalizeTags(row.tags),
+        kind,
+        durationMinutes,
+        durationUncertain,
       };
     })
     .filter((item): item is ParsedTodoCandidate => Boolean(item));
@@ -89,10 +123,6 @@ function normalizeWarnings(value: unknown) {
     .map((warning) => (typeof warning === "string" ? warning.trim() : ""))
     .filter(Boolean)
     .slice(0, 6);
-}
-
-function cleanEnvValue(value: string | undefined) {
-  return value?.trim().replace(/^["']|["']$/g, "") ?? "";
 }
 
 function kimiChatCompletionsUrl(baseUrl: string) {
@@ -116,34 +146,52 @@ function listContextFromRequest(value: unknown): TodoParserListContext[] {
 }
 
 function buildSystemPrompt() {
-  return `You parse messy natural-language notes into Lizhi Routine todo items.
+  return `You parse messy natural-language notes into Lizhi Routine items. Each item is either a TASK (something the user works on, flexible duration) or an EVENT (something that happens at a fixed time the user attends).
 
 Return one JSON object only:
 {
   "todos": [
     {
-      "title": "short actionable todo name",
-      "listName": "matching or new todo list name",
+      "title": "short actionable name",
+      "listName": "matching or new list name",
       "category": "T0",
       "dueDate": "YYYY-MM-DD or null",
       "dueTime": "HH:MM or null",
-      "tags": ["optional", "short"]
+      "tags": ["optional", "short"],
+      "kind": "task" | "event",
+      "durationMinutes": <int or null>,
+      "durationUncertain": <true | false>
     }
   ],
   "warnings": ["optional short uncertainty notes"]
 }
 
-Rules:
+Classifying task vs event:
+- "event" when the item IS a fixed-time happening the user attends or participates in. Hallmarks: explicit time of day AND it makes no sense to estimate "how long will this take me" — the duration belongs to the event itself.
+  Examples: "lab from 9-11 Friday", "BPS3071 lecture Mon 14:00", "dentist Wed 2:30pm", "team standup at 10am", "concert Sat 7pm", "interview Tue 11am for 45min".
+- "task" when the item is work the user does. Even with a deadline ("submit X by Friday 17:00"), it's still a task — the deadline is when it's due, not when the work happens.
+  Examples: "lab report due Friday", "read chapter 5", "fix login bug", "email Sarah", "book flights", "study for exam".
+- If unsure, default to "task". Tasks are the safer fallback because they're flexible.
+
+durationMinutes:
+- For events: best-effort estimate from the text. "9-11" → 120; "45min interview" → 45; "1hr meeting" → 60. If unknown, use 60 (sensible default for a meeting).
+- For tasks: always null.
+
+durationUncertain:
+- For events: true when the source text did NOT give an explicit duration (you guessed 60min as a default). False when the text was specific (e.g. "9-11", "30min", "1 hour").
+- For tasks: always false.
+
+Other rules:
 - Output a JSON object, not an array.
-- Preserve the user's intent. Split clear lists into separate todos.
+- Preserve the user's intent. Split clear lists into separate items.
 - Prefer existing list names when the text matches one, including course codes and project names.
 - If a list is clearly implied but does not exist, use that implied list name.
 - If no list is implied, use "Inbox".
 - dueDate must be YYYY-MM-DD or null. dueTime must be 24-hour HH:MM or null.
-- If no due time is explicit, use null, not 24:00.
-- Infer category as T0 for urgent/high-stakes/deadline-critical work, T1 for important study/work/health, T2 for chores/admin.
+- For events: dueTime should be set when a clock time was given. If no clock time was given but item is clearly an event (e.g., "lecture Monday"), set dueTime to null and kind=task (we can't place an event without a time).
+- Infer category as T0 for urgent/high-stakes/deadline-critical, T1 for important study/work/health, T2 for chores/admin.
 - Tags should be concise labels from the text, without # symbols.
-- Never invent todos that are not present in the user text.`;
+- Never invent items that are not present in the user text.`;
 }
 
 function buildUserPrompt(request: ParseTodosRequest, realToday: string) {
@@ -159,7 +207,15 @@ function buildUserPrompt(request: ParseTodosRequest, realToday: string) {
   });
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  if (!isSameOrigin(request)) {
+    return NextResponse.json({ error: "Cross-origin request blocked." }, { status: 403 });
+  }
+  const user = await getServerUser();
+  if (!user) {
+    return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+  }
+
   const apiKey = cleanEnvValue(process.env.MOONSHOT_API_KEY);
   if (!apiKey) {
     return NextResponse.json(

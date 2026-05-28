@@ -16,6 +16,8 @@ export const defaultTemplates: RoutineTemplate[] = [
     icon: "moon",
     kind: "sleep",
     default_duration_minutes: 8 * 60,
+    commute_enabled: false,
+    commute_config: null,
     built_in: true,
     created_at: EPOCH,
     updated_at: EPOCH,

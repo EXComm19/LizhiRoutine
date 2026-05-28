@@ -1,23 +1,28 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   BookOpen,
   Briefcase,
   Building2,
   CalendarRange,
+  Check,
+  CirclePlus,
+  Clock,
   GraduationCap,
   Pencil,
   Plane,
   Plus,
   Trash2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/planner/primitives";
 import {
-  EmptyState,
-  Label,
-  SectionHeader,
-} from "@/components/planner/primitives";
+  EDITOR_BODY_CLASS,
+  EDITOR_CARD_CLASS,
+  EditorFooter,
+  EditorHeader,
+  EditorModal,
+} from "@/components/planner/editor";
 import { periodColorTokens } from "@/lib/colors";
 import {
   createPeriod,
@@ -90,12 +95,21 @@ function PeriodKindIcon({
   }
 }
 
+const periodEditorLabelClass =
+  "font-[family-name:var(--font-mono)] text-[10.5px] font-medium uppercase tracking-[0.12em] text-[color:var(--ink-3)]";
+
+const periodEditorSectionClass =
+  "border-b border-[color:var(--line-soft)] py-3.5";
+
+const periodEditorFieldBoxClass =
+  "flex h-9 w-full items-center gap-2 rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 transition-colors focus-within:border-[color:var(--line-strong)] focus-within:bg-[color:var(--card)] focus-within:ring-2 focus-within:ring-[color:var(--ring)]";
+
 const periodEditorInputClass =
-  "min-h-0 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2 py-1 text-[11px] leading-4 text-zinc-800 dark:text-zinc-200 outline-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20";
+  "min-w-0 flex-1 border-0 bg-transparent text-[13px] font-medium text-[color:var(--ink)] outline-none placeholder:text-[color:var(--ink-3)]";
 
 const periodEditorDateClass = cn(
   periodEditorInputClass,
-  "h-8 w-full min-w-0 text-[10px] tabular-nums",
+  "font-[family-name:var(--font-mono)] text-[12.5px] tabular-nums",
 );
 
 export function PeriodsPanel({
@@ -119,47 +133,91 @@ export function PeriodsPanel({
       ),
     [periods],
   );
+  const editingPeriod = sortedPeriods.find((period) => period.id === editingId);
 
   return (
-    <>
-      <SectionHeader title="Periods" onAdd={() => setIsAdding(true)} />
-      <div className="mt-3 space-y-2 pb-4">
-        {isAdding && (
-          <PeriodEditor
-            submitLabel="Add"
-            onCancel={() => setIsAdding(false)}
-            onSubmit={(period) => {
-              upsertPeriod(period);
-              setIsAdding(false);
-            }}
-          />
-        )}
-        {sortedPeriods.map((period) =>
-          editingId === period.id ? (
-            <PeriodEditor
-              key={period.id}
-              period={period}
-              submitLabel="Save"
-              onCancel={() => setEditingId(null)}
-              onSubmit={(next) => {
-                upsertPeriod(next);
-                setEditingId(null);
-              }}
-            />
-          ) : (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PeriodPanelHeader
+        className="pt-3"
+        trailing={
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-[var(--r-sm)] px-1.5 py-1 font-[family-name:var(--font-ui)] text-[11.5px] font-medium normal-case tracking-normal text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+            title="Add period"
+            aria-label="Add period"
+            onClick={() => setIsAdding(true)}
+          >
+            <CirclePlus className="h-3.5 w-3.5" />
+            New
+          </button>
+        }
+      >
+        Periods
+      </PeriodPanelHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto px-0 pb-4 [scrollbar-color:var(--line)_transparent]">
+        {sortedPeriods.length ? (
+          sortedPeriods.map((period) => (
             <PeriodCard
               key={period.id}
               period={period}
               onEdit={() => setEditingId(period.id)}
               onDelete={() => deletePeriod(period.id)}
             />
-          ),
-        )}
-        {!sortedPeriods.length && !isAdding && (
-          <EmptyState text="No periods yet. Add a placement, holiday, or custom range." />
-        )}
+          ))
+        ) : !isAdding ? (
+          <div className="mx-3.5">
+            <EmptyState text="No periods yet. Add a placement, holiday, or custom range." />
+          </div>
+        ) : null}
       </div>
-    </>
+      {isAdding && (
+        <PeriodEditor
+          submitLabel="Add"
+          onCancel={() => setIsAdding(false)}
+          onSubmit={(period) => {
+            upsertPeriod(period);
+            setIsAdding(false);
+          }}
+        />
+      )}
+      {editingPeriod && (
+        <PeriodEditor
+          period={editingPeriod}
+          submitLabel="Save"
+          onCancel={() => setEditingId(null)}
+          onSubmit={(next) => {
+            upsertPeriod(next);
+            setEditingId(null);
+          }}
+          onDelete={() => {
+            deletePeriod(editingPeriod.id);
+            setEditingId(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function PeriodPanelHeader({
+  children,
+  trailing,
+  className,
+}: {
+  children: ReactNode;
+  trailing?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between px-[18px] pb-2 font-[family-name:var(--font-mono)] text-[10.5px] font-medium uppercase tracking-[0.14em] text-[color:var(--ink-3)]",
+        className,
+      )}
+    >
+      <span>{children}</span>
+      {trailing}
+    </div>
   );
 }
 
@@ -176,63 +234,70 @@ function PeriodCard({
   const isAllDay = !period.daily_start_time || !period.daily_end_time;
   const timeLabel = isAllDay
     ? "All day"
-    : `${period.daily_start_time} – ${period.daily_end_time}`;
+    : `${period.daily_start_time} - ${period.daily_end_time}`;
 
   return (
-    <div className="group rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2.5 transition-all hover:border-zinc-300 dark:hover:border-zinc-600 hover:shadow-sm">
-      <div className="flex items-start gap-2">
-        <span
-          className={cn(
-            "mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
-            tokens.block,
-            tokens.text,
-          )}
-        >
-          <PeriodKindIcon kind={period.kind} className="h-3.5 w-3.5" />
-        </span>
+    <div
+      className="group mx-3 mb-1.5 flex cursor-default select-none items-center gap-[11px] rounded-[11px] border border-transparent p-2.5 transition-all duration-150 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)]"
+      title={`${period.title}\n${formatPeriodRange(period)}\n${periodKindLabel(period.kind)} - ${timeLabel}`}
+      onDoubleClick={onEdit}
+    >
+      <div
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]",
+          tokens.block,
+          tokens.text,
+        )}
+        aria-hidden="true"
+      >
+        <PeriodKindIcon kind={period.kind} className="h-3.5 w-3.5" />
+      </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[13px] font-semibold text-zinc-900 dark:text-zinc-100">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[13.5px] font-semibold tracking-[-0.005em] text-[color:var(--ink)]">
               {period.title}
             </span>
             <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tokens.accent)} />
           </div>
-          <div className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-            {formatPeriodRange(period)}
-          </div>
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-            <span className="rounded bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 font-medium">
+          <div className="mt-[3px] flex min-w-0 items-center gap-1.5 font-[family-name:var(--font-mono)] text-[10.5px] text-[color:var(--ink-3)]">
+            <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.04em]", tokens.chip)}>
               {periodKindLabel(period.kind)}
             </span>
-            <span>{timeLabel}</span>
+            <span className="truncate">{formatPeriodRange(period)}</span>
+            <span className="shrink-0">{timeLabel}</span>
             {period.breaks.length > 0 && (
-              <span className="rounded bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 font-medium">
+              <span className="shrink-0 rounded bg-[color:var(--sunken)] px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--ink-3)]">
                 {period.breaks.length} break{period.breaks.length === 1 ? "" : "s"}
               </span>
             )}
           </div>
         </div>
-        <div className="flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           <button
             type="button"
-            className="rounded p-1 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200"
+            className="rounded p-1 text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
             title="Edit period"
             aria-label={`Edit ${period.title}`}
-            onClick={onEdit}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit();
+            }}
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
-            className="rounded p-1 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-rose-50 dark:hover:bg-rose-500/15 hover:text-rose-600 dark:hover:text-rose-400"
+            className="rounded p-1 text-[color:var(--ink-3)] transition-colors hover:bg-[oklch(95%_0.04_25)] hover:text-[oklch(55%_0.18_25)]"
             title="Delete period"
             aria-label={`Delete ${period.title}`}
-            onClick={onDelete}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
-      </div>
     </div>
   );
 }
@@ -242,6 +307,7 @@ type PeriodEditorProps = {
   submitLabel: string;
   onCancel: () => void;
   onSubmit: (period: Period) => void;
+  onDelete?: () => void;
 };
 
 function PeriodEditor({
@@ -249,6 +315,7 @@ function PeriodEditor({
   submitLabel,
   onCancel,
   onSubmit,
+  onDelete,
 }: PeriodEditorProps) {
   const [title, setTitle] = useState(period?.title ?? "");
   const [kind, setKind] = useState<PeriodKind>(period?.kind ?? "placement");
@@ -343,88 +410,117 @@ function PeriodEditor({
   };
 
   return (
-    <div className="space-y-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2.5 text-[11px] shadow-sm">
-      <input
-        className={cn(periodEditorInputClass, "h-8 w-full")}
-        placeholder="Period title (e.g. Spring placement)"
-        value={title}
-        onChange={(event) => setTitle(event.target.value)}
-        autoFocus
-      />
-
-      <PeriodKindPicker value={kind} onChange={handleKindChange} />
-      <PeriodColorPicker value={color} onChange={setColor} />
-
-      <PeriodDateRangeFields
-        startDate={startDate}
-        endDate={endDate}
-        onStartDateChange={setStartDate}
-        onEndDateChange={setEndDate}
-      />
-
-      <label className="flex items-center gap-1.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-300">
-        <input
-          type="checkbox"
-          className="h-3 w-3 rounded border-zinc-300 dark:border-zinc-700 accent-indigo-600"
-          checked={allDay}
-          onChange={(event) => setAllDay(event.target.checked)}
+    <EditorModal
+      onClose={onCancel}
+      widthClass="w-[460px] max-w-[calc(100vw-2rem)]"
+    >
+      <div className={EDITOR_CARD_CLASS}>
+        <EditorHeader
+          eyebrow={period ? "Edit period" : "Add period"}
+          title={title.trim() || (period ? "Untitled period" : "New period")}
+          meta={[
+            periodKindLabel(kind),
+            startDate && endDate
+              ? formatPeriodRange({
+                  ...(period ?? {
+                    id: "",
+                    schema_version: 0,
+                    title: "",
+                    kind,
+                    color,
+                    days_of_week: [],
+                    breaks: [],
+                    notes: "",
+                    created_at: "",
+                    updated_at: "",
+                  }),
+                  start_date: startDate,
+                  end_date: endDate,
+                } as Period)
+              : undefined,
+            allDay ? "All day" : `${dailyStart} – ${dailyEnd}`,
+          ]}
+          onCancel={onCancel}
         />
-        All day (no time window)
-      </label>
+        <div className={cn(EDITOR_BODY_CLASS, "px-5 py-1")}>
+          <div className={periodEditorSectionClass}>
+            <div className={cn(periodEditorLabelClass, "mb-2.5")}>Title</div>
+            <div className={periodEditorFieldBoxClass}>
+              <input
+                className={periodEditorInputClass}
+                placeholder="Period name"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                autoFocus
+              />
+            </div>
+          </div>
+          <PeriodKindPicker value={kind} onChange={handleKindChange} />
+          <PeriodColorPicker value={color} onChange={setColor} />
+          <PeriodDateRangeFields
+            startDate={startDate}
+            endDate={endDate}
+            onStartDateChange={setStartDate}
+            onEndDateChange={setEndDate}
+          />
 
-      {!allDay && (
-        <PeriodTimeWindowFields
-          dailyStart={dailyStart}
-          dailyEnd={dailyEnd}
-          onDailyStartChange={setDailyStart}
-          onDailyEndChange={setDailyEnd}
-        />
-      )}
+          <div className={periodEditorSectionClass}>
+            <button
+              type="button"
+              className="flex select-none items-center gap-2 text-[13px] font-medium text-[color:var(--ink-2)]"
+              onClick={() => setAllDay((current) => !current)}
+            >
+              <span
+                className={cn(
+                  "inline-grid h-4 w-4 place-items-center rounded border border-[color:var(--line-strong)] bg-[color:var(--card)] transition-colors",
+                  allDay && "border-[color:var(--ink)] bg-[color:var(--ink)] !text-[color:var(--card)]",
+                )}
+              >
+                {allDay && <Check className="h-3 w-3" />}
+              </span>
+              <span>All day (no time window)</span>
+            </button>
 
-      <PeriodWeekdayToggles value={daysOfWeek} onToggle={toggleDay} />
+            {!allDay && (
+              <PeriodTimeWindowFields
+                dailyStart={dailyStart}
+                dailyEnd={dailyEnd}
+                onDailyStartChange={setDailyStart}
+                onDailyEndChange={setDailyEnd}
+              />
+            )}
+          </div>
 
-      {!allDay && (
-        <PeriodBreaksList
-          breaks={breaks}
-          onAdd={addBreak}
-          onUpdate={updateBreak}
-          onRemove={removeBreak}
-        />
-      )}
+          <PeriodWeekdayToggles value={daysOfWeek} onToggle={toggleDay} />
 
-      <div>
-        <Label>Notes</Label>
-        <textarea
-          className={cn(periodEditorInputClass, "w-full resize-y")}
-          placeholder="Optional notes"
-          rows={2}
-          value={notes}
-          onChange={(event) => setNotes(event.target.value)}
+          {!allDay && (
+            <PeriodBreaksList
+              breaks={breaks}
+              onAdd={addBreak}
+              onUpdate={updateBreak}
+              onRemove={removeBreak}
+            />
+          )}
+
+          <div className={cn(periodEditorSectionClass, "border-b-0")}>
+            <div className={cn(periodEditorLabelClass, "mb-2.5")}>Notes</div>
+            <textarea
+              className="min-h-20 w-full resize-y rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-3 py-2 text-[13px] text-[color:var(--ink)] outline-none transition-colors placeholder:text-[color:var(--ink-3)] focus:border-[color:var(--line-strong)] focus:bg-[color:var(--card)] focus:ring-2 focus:ring-[color:var(--ring)]"
+              placeholder="Optional notes"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+            />
+          </div>
+        </div>
+        <EditorFooter
+          onDelete={onDelete}
+          onCancel={onCancel}
+          onSubmit={handleSubmit}
+          submitLabel={submitLabel}
+          submitDisabled={!isValid}
         />
       </div>
-
-      <div className="flex justify-end gap-1.5 pt-0.5">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-[11px]"
-          onClick={onCancel}
-        >
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          className="h-7 px-2 text-[11px]"
-          disabled={!isValid}
-          onClick={handleSubmit}
-        >
-          {submitLabel}
-        </Button>
-      </div>
-    </div>
+    </EditorModal>
   );
 }
 
@@ -436,9 +532,9 @@ function PeriodKindPicker({
   onChange: (next: PeriodKind) => void;
 }) {
   return (
-    <div>
-      <Label>Kind</Label>
-      <div className="grid grid-cols-3 gap-1">
+    <div className={periodEditorSectionClass}>
+      <div className={cn(periodEditorLabelClass, "mb-2.5")}>Kind</div>
+      <div className="grid grid-cols-3 gap-1.5">
         {PERIOD_KIND_ORDER.map((kind) => {
           const isActive = kind === value;
           return (
@@ -446,14 +542,14 @@ function PeriodKindPicker({
               key={kind}
               type="button"
               className={cn(
-                "flex h-7 min-w-0 items-center justify-center gap-1 rounded-md border px-1.5 text-[9.5px] font-medium leading-none transition-colors",
+                "flex min-w-0 items-center justify-center gap-1.5 rounded-[var(--r-sm)] border px-2 py-2 text-[12.5px] font-semibold leading-none transition-colors",
                 isActive
-                  ? "border-indigo-300 dark:border-indigo-500/40 bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300"
-                  : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/60",
+                  ? "border-[color:var(--ink)] bg-[color:var(--ink)] !text-[color:var(--card)]"
+                  : "border-[color:var(--line)] bg-[color:var(--card)] !text-[color:var(--ink-2)] hover:border-[color:var(--line-strong)] hover:bg-[color:var(--sunken)] hover:!text-[color:var(--ink)]",
               )}
               onClick={() => onChange(kind)}
             >
-              <PeriodKindIcon kind={kind} className="h-3 w-3 shrink-0" />
+              <PeriodKindIcon kind={kind} className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{periodKindLabel(kind)}</span>
             </button>
           );
@@ -471,9 +567,9 @@ function PeriodColorPicker({
   onChange: (next: PeriodColor) => void;
 }) {
   return (
-    <div>
-      <Label>Colour</Label>
-      <div className="flex items-center gap-1.5">
+    <div className={periodEditorSectionClass}>
+      <div className={cn(periodEditorLabelClass, "mb-2.5")}>Colour</div>
+      <div className="flex items-center gap-3">
         {PERIOD_COLOR_OPTIONS.map((option) => {
           const tokens = periodColorTokens(option);
           const isActive = option === value;
@@ -482,16 +578,17 @@ function PeriodColorPicker({
               key={option}
               type="button"
               className={cn(
-                "h-6 w-6 rounded-full border-2 transition-transform",
+                "relative inline-grid h-[26px] w-[26px] place-items-center rounded-full border border-transparent transition-transform hover:scale-105",
                 tokens.accent,
-                isActive
-                  ? "border-zinc-900 dark:border-zinc-100 scale-110"
-                  : "border-transparent hover:scale-105",
+                isActive &&
+                  "after:absolute after:-inset-1 after:rounded-full after:border after:border-[color:var(--ink)]",
               )}
               title={option}
               aria-label={option}
               onClick={() => onChange(option)}
-            />
+            >
+              {isActive && <Check className="h-3.5 w-3.5 text-white drop-shadow-sm" />}
+            </button>
           );
         })}
       </div>
@@ -511,25 +608,29 @@ function PeriodDateRangeFields({
   onEndDateChange: (value: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="grid grid-cols-2 gap-4 border-b border-[color:var(--line-soft)] py-3.5">
       <div>
-        <Label>Start date</Label>
-        <input
-          type="date"
-          className={periodEditorDateClass}
-          value={startDate}
-          onChange={(event) => onStartDateChange(event.target.value)}
-        />
+        <div className={cn(periodEditorLabelClass, "mb-2")}>Start date</div>
+        <div className={periodEditorFieldBoxClass}>
+          <input
+            type="date"
+            className={periodEditorDateClass}
+            value={startDate}
+            onChange={(event) => onStartDateChange(event.target.value)}
+          />
+        </div>
       </div>
       <div>
-        <Label>End date</Label>
-        <input
-          type="date"
-          className={periodEditorDateClass}
-          value={endDate}
-          min={startDate}
-          onChange={(event) => onEndDateChange(event.target.value)}
-        />
+        <div className={cn(periodEditorLabelClass, "mb-2")}>End date</div>
+        <div className={periodEditorFieldBoxClass}>
+          <input
+            type="date"
+            className={periodEditorDateClass}
+            value={endDate}
+            min={startDate}
+            onChange={(event) => onEndDateChange(event.target.value)}
+          />
+        </div>
       </div>
     </div>
   );
@@ -547,26 +648,32 @@ function PeriodTimeWindowFields({
   onDailyEndChange: (value: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="mt-3 grid grid-cols-2 gap-4">
       <div>
-        <Label>Starts</Label>
-        <input
-          type="time"
-          step={1800}
-          className={periodEditorDateClass}
-          value={dailyStart}
-          onChange={(event) => onDailyStartChange(event.target.value)}
-        />
+        <div className={cn(periodEditorLabelClass, "mb-2")}>Starts</div>
+        <div className={periodEditorFieldBoxClass}>
+          <input
+            type="time"
+            step={1800}
+            className={periodEditorDateClass}
+            value={dailyStart}
+            onChange={(event) => onDailyStartChange(event.target.value)}
+          />
+          <Clock className="h-3.5 w-3.5 shrink-0 text-[color:var(--ink-3)]" />
+        </div>
       </div>
       <div>
-        <Label>Ends</Label>
-        <input
-          type="time"
-          step={1800}
-          className={periodEditorDateClass}
-          value={dailyEnd}
-          onChange={(event) => onDailyEndChange(event.target.value)}
-        />
+        <div className={cn(periodEditorLabelClass, "mb-2")}>Ends</div>
+        <div className={periodEditorFieldBoxClass}>
+          <input
+            type="time"
+            step={1800}
+            className={periodEditorDateClass}
+            value={dailyEnd}
+            onChange={(event) => onDailyEndChange(event.target.value)}
+          />
+          <Clock className="h-3.5 w-3.5 shrink-0 text-[color:var(--ink-3)]" />
+        </div>
       </div>
     </div>
   );
@@ -580,9 +687,9 @@ function PeriodWeekdayToggles({
   onToggle: (index: number) => void;
 }) {
   return (
-    <div>
-      <Label>Days of week</Label>
-      <div className="flex gap-1">
+    <div className={periodEditorSectionClass}>
+      <div className={cn(periodEditorLabelClass, "mb-2.5")}>Days of week</div>
+      <div className="flex gap-1.5">
         {WEEKDAY_LABELS.map((day) => {
           const active = value.includes(day.index);
           return (
@@ -590,10 +697,10 @@ function PeriodWeekdayToggles({
               key={day.index}
               type="button"
               className={cn(
-                "h-6 w-6 rounded-md border text-[10px] font-semibold leading-none transition-colors",
+                "h-8 w-8 rounded-full border text-[12px] font-bold leading-none transition-colors",
                 active
-                  ? "border-indigo-300 dark:border-indigo-500/40 bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300"
-                  : "border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/60",
+                  ? "border-[color:var(--ink)] bg-[color:var(--ink)] !text-[color:var(--card)]"
+                  : "border-[color:var(--line)] bg-[color:var(--card)] !text-[color:var(--ink-2)] hover:border-[color:var(--line-strong)] hover:bg-[color:var(--sunken)]",
               )}
               onClick={() => onToggle(day.index)}
             >
@@ -618,31 +725,31 @@ function PeriodBreaksList({
   onRemove: (id: string) => void;
 }) {
   return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <Label className="mb-0">Breaks</Label>
+    <div className={periodEditorSectionClass}>
+      <div className="mb-2.5 flex items-center justify-between">
+        <div className={periodEditorLabelClass}>Breaks</div>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-indigo-600 dark:text-indigo-300 transition-colors hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
+          className="inline-flex items-center gap-1 rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-semibold text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
           onClick={onAdd}
         >
-          <Plus className="h-3 w-3" />
+          <Plus className="h-3.5 w-3.5" />
           Add break
         </button>
       </div>
       {breaks.length === 0 ? (
-        <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
+        <p className="text-[12.5px] italic text-[color:var(--ink-3)]">
           Add lunch or other gaps inside the daily window.
         </p>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {breaks.map((value) => (
             <div
               key={value.id}
-              className="flex items-center gap-1.5 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/60 p-1.5"
+              className="flex items-center gap-2 rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--sunken)] p-2"
             >
               <input
-                className="min-w-0 flex-1 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2 py-1 text-[11px] text-zinc-700 dark:text-zinc-300 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
+                className="min-w-0 flex-1 rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 py-1.5 text-[12.5px] font-medium text-[color:var(--ink)] outline-none focus:border-[color:var(--line-strong)] focus:ring-2 focus:ring-[color:var(--ring)]"
                 placeholder="Label"
                 value={value.label}
                 onChange={(event) =>
@@ -652,7 +759,7 @@ function PeriodBreaksList({
               <input
                 type="time"
                 step={1800}
-                className="w-[88px] rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-1.5 py-1 text-[11px] tabular-nums text-zinc-700 dark:text-zinc-300 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
+                className="w-[88px] rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2 py-1.5 font-[family-name:var(--font-mono)] text-[12px] tabular-nums text-[color:var(--ink)] outline-none focus:border-[color:var(--line-strong)] focus:ring-2 focus:ring-[color:var(--ring)]"
                 value={value.start_time}
                 onChange={(event) =>
                   onUpdate(value.id, { start_time: event.target.value })
@@ -661,7 +768,7 @@ function PeriodBreaksList({
               <input
                 type="time"
                 step={1800}
-                className="w-[88px] rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-1.5 py-1 text-[11px] tabular-nums text-zinc-700 dark:text-zinc-300 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
+                className="w-[88px] rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2 py-1.5 font-[family-name:var(--font-mono)] text-[12px] tabular-nums text-[color:var(--ink)] outline-none focus:border-[color:var(--line-strong)] focus:ring-2 focus:ring-[color:var(--ring)]"
                 value={value.end_time}
                 onChange={(event) =>
                   onUpdate(value.id, { end_time: event.target.value })
@@ -669,11 +776,11 @@ function PeriodBreaksList({
               />
               <button
                 type="button"
-                className="rounded p-1 text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-rose-50 dark:hover:bg-rose-500/15 hover:text-rose-600 dark:hover:text-rose-400"
+                className="rounded-[var(--r-sm)] p-1.5 text-[color:var(--ink-3)] transition-colors hover:bg-[oklch(95%_0.04_25)] hover:text-[oklch(55%_0.18_25)]"
                 title="Remove break"
                 onClick={() => onRemove(value.id)}
               >
-                <Trash2 className="h-3 w-3" />
+                <Trash2 className="h-3.5 w-3.5" />
               </button>
             </div>
           ))}

@@ -3,7 +3,7 @@ import type { Category, Period, RoutineTemplate, TodoListColor } from "@/lib/sch
 export type ColorTokens = {
   /** Filled accent (left bar on a block, dot in a chip). */
   accent: string;
-  /** Soft tinted background for blocks/cards. */
+  /** Soft tinted background for blocks/cards (includes border). */
   block: string;
   /** Stronger tint for ribbons / month-view stripes. */
   ribbon: string;
@@ -13,57 +13,77 @@ export type ColorTokens = {
   text: string;
 };
 
+/**
+ * Design palette aligned with the warm-cream system in `app/globals.css`.
+ * Each palette name maps to a tinted block colour family that harmonises
+ * with the cream canvas. Values use Tailwind v4 arbitrary-value syntax so
+ * they pick up the CSS custom properties from `:root` / `html.dark` and
+ * automatically respect the active theme.
+ */
 const palette: Record<TodoListColor, ColorTokens> = {
   blue: {
-    accent: "bg-blue-600 dark:bg-blue-400",
+    accent:
+      "bg-[oklch(48%_0.10_250)] dark:bg-[oklch(78%_0.08_250)]",
     block:
-      "bg-blue-100/85 border-blue-300/80 dark:bg-blue-500/20 dark:border-blue-400/45",
-    ribbon: "bg-blue-300/85 dark:bg-blue-400/50",
-    chip: "bg-blue-200 text-blue-900 dark:bg-blue-500/30 dark:text-blue-100",
-    text: "text-blue-900 dark:text-blue-100",
+      "bg-[oklch(94%_0.03_250)] border-[oklch(82%_0.06_250)] dark:bg-[oklch(28%_0.06_250)] dark:border-[oklch(40%_0.08_250)]",
+    ribbon:
+      "bg-[oklch(82%_0.08_250)] dark:bg-[oklch(45%_0.10_250)]",
+    chip:
+      "bg-[oklch(90%_0.05_250)] text-[oklch(38%_0.10_250)] dark:bg-[oklch(38%_0.10_250)] dark:text-[oklch(82%_0.06_250)]",
+    text: "text-[oklch(38%_0.10_260)] dark:text-[oklch(82%_0.06_260)]",
   },
   emerald: {
-    accent: "bg-emerald-600 dark:bg-emerald-400",
+    accent:
+      "bg-[oklch(50%_0.13_165)] dark:bg-[oklch(72%_0.12_165)]",
     block:
-      "bg-emerald-100/85 border-emerald-300/80 dark:bg-emerald-500/20 dark:border-emerald-400/45",
-    ribbon: "bg-emerald-300/85 dark:bg-emerald-400/50",
+      "bg-[oklch(94%_0.04_165)] border-[oklch(82%_0.07_165)] dark:bg-[oklch(28%_0.06_165)] dark:border-[oklch(40%_0.08_165)]",
+    ribbon:
+      "bg-[oklch(82%_0.10_165)] dark:bg-[oklch(50%_0.12_165)]",
     chip:
-      "bg-emerald-200 text-emerald-900 dark:bg-emerald-500/30 dark:text-emerald-100",
-    text: "text-emerald-900 dark:text-emerald-100",
+      "bg-[oklch(90%_0.06_165)] text-[oklch(38%_0.12_165)] dark:bg-[oklch(38%_0.10_165)] dark:text-[oklch(82%_0.07_165)]",
+    text: "text-[oklch(38%_0.12_165)] dark:text-[oklch(82%_0.07_165)]",
   },
   amber: {
-    accent: "bg-orange-500 dark:bg-orange-300",
+    accent:
+      "bg-[oklch(60%_0.14_60)] dark:bg-[oklch(75%_0.13_60)]",
     block:
-      "bg-orange-100/90 border-orange-300/80 dark:bg-orange-500/20 dark:border-orange-300/45",
-    ribbon: "bg-orange-300/85 dark:bg-orange-300/50",
+      "bg-[oklch(94%_0.05_75)] border-[oklch(82%_0.10_70)] dark:bg-[oklch(28%_0.06_75)] dark:border-[oklch(40%_0.08_70)]",
+    ribbon:
+      "bg-[oklch(82%_0.12_70)] dark:bg-[oklch(50%_0.14_70)]",
     chip:
-      "bg-orange-200 text-orange-900 dark:bg-orange-500/30 dark:text-orange-100",
-    text: "text-orange-900 dark:text-orange-100",
+      "bg-[oklch(91%_0.07_70)] text-[oklch(40%_0.10_60)] dark:bg-[oklch(38%_0.10_60)] dark:text-[oklch(82%_0.10_70)]",
+    text: "text-[oklch(40%_0.10_60)] dark:text-[oklch(82%_0.10_70)]",
   },
   rose: {
-    accent: "bg-rose-600 dark:bg-rose-400",
+    accent:
+      "bg-[oklch(55%_0.18_15)] dark:bg-[oklch(72%_0.15_15)]",
     block:
-      "bg-rose-100/85 border-rose-300/80 dark:bg-rose-500/20 dark:border-rose-400/45",
-    ribbon: "bg-rose-300/85 dark:bg-rose-400/50",
-    chip: "bg-rose-200 text-rose-900 dark:bg-rose-500/30 dark:text-rose-100",
-    text: "text-rose-900 dark:text-rose-100",
+      "bg-[oklch(94%_0.04_15)] border-[oklch(82%_0.08_15)] dark:bg-[oklch(28%_0.06_15)] dark:border-[oklch(40%_0.10_15)]",
+    ribbon:
+      "bg-[oklch(82%_0.10_15)] dark:bg-[oklch(50%_0.14_15)]",
+    chip:
+      "bg-[oklch(90%_0.06_15)] text-[oklch(40%_0.14_15)] dark:bg-[oklch(38%_0.12_15)] dark:text-[oklch(82%_0.08_15)]",
+    text: "text-[oklch(40%_0.14_15)] dark:text-[oklch(82%_0.08_15)]",
   },
   violet: {
-    accent: "bg-violet-600 dark:bg-violet-400",
+    accent:
+      "bg-[oklch(48%_0.18_305)] dark:bg-[oklch(70%_0.16_305)]",
     block:
-      "bg-violet-100/85 border-violet-300/80 dark:bg-violet-500/20 dark:border-violet-400/45",
-    ribbon: "bg-violet-300/85 dark:bg-violet-400/50",
+      "bg-[oklch(94%_0.04_305)] border-[oklch(80%_0.08_305)] dark:bg-[oklch(28%_0.08_305)] dark:border-[oklch(40%_0.10_305)]",
+    ribbon:
+      "bg-[oklch(80%_0.10_305)] dark:bg-[oklch(50%_0.14_305)]",
     chip:
-      "bg-violet-200 text-violet-900 dark:bg-violet-500/30 dark:text-violet-100",
-    text: "text-violet-900 dark:text-violet-100",
+      "bg-[oklch(90%_0.06_305)] text-[oklch(38%_0.16_305)] dark:bg-[oklch(38%_0.14_305)] dark:text-[oklch(82%_0.08_305)]",
+    text: "text-[oklch(38%_0.16_305)] dark:text-[oklch(82%_0.08_305)]",
   },
   zinc: {
-    accent: "bg-zinc-600 dark:bg-zinc-300",
+    accent: "bg-ink dark:bg-ink",
     block:
-      "bg-zinc-200/80 border-zinc-300 dark:bg-zinc-500/20 dark:border-zinc-300/40",
-    ribbon: "bg-zinc-300/90 dark:bg-zinc-300/45",
-    chip: "bg-zinc-200 text-zinc-800 dark:bg-zinc-500/30 dark:text-zinc-100",
-    text: "text-zinc-800 dark:text-zinc-100",
+      "bg-sunken border-line dark:bg-sunken dark:border-line",
+    ribbon:
+      "bg-line-strong/70 dark:bg-line-strong/40",
+    chip: "bg-ink text-[#f7f1de] dark:bg-ink dark:text-[#1A170E]",
+    text: "text-ink dark:text-ink",
   },
 };
 
@@ -83,9 +103,15 @@ export function routineColorTokens(color: RoutineTemplate["color"]): ColorTokens
   return paletteTokens(color);
 }
 
+/**
+ * Tier (T0/T1/T2) to palette mapping, matching the design:
+ *   T0 = ink (solid neutral)
+ *   T1 = plum/violet
+ *   T2 = amber
+ */
 const categoryToColor: Record<Category, TodoListColor> = {
-  T0: "blue",
-  T1: "emerald",
+  T0: "zinc",
+  T1: "violet",
   T2: "amber",
 };
 

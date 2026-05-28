@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { LogIn, LogOut, UserCircle2 } from "lucide-react";
+import { LogIn, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type AccountButtonProps = {
@@ -11,6 +11,14 @@ type AccountButtonProps = {
   onOpenAuth: () => void;
   onSignOut: () => void;
 };
+
+const avatarGradient =
+  "bg-[linear-gradient(160deg,oklch(72%_0.14_60),oklch(50%_0.18_305))]";
+
+function userInitial(user: User | null) {
+  const source = user?.email ?? "";
+  return source.trim().charAt(0).toUpperCase() || "L";
+}
 
 export function AccountButton({
   status,
@@ -24,9 +32,13 @@ export function AccountButton({
 
   if (status === "loading") {
     return (
-      <span className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-zinc-400 dark:text-zinc-500">
-        <UserCircle2 className="h-4 w-4" aria-hidden="true" />
-        …
+      <span
+        className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[color:var(--line)] bg-[color:var(--card)] p-1 pr-2 text-[11px] text-[color:var(--ink-3)]"
+        aria-hidden="true"
+      >
+        <span className="inline-grid h-[22px] w-[22px] place-items-center rounded-full bg-[color:var(--sunken)] font-[family-name:var(--font-mono)] text-[10px] font-semibold text-[color:var(--ink-3)]">
+          L
+        </span>
       </span>
     );
   }
@@ -35,33 +47,40 @@ export function AccountButton({
     return (
       <button
         type="button"
-        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800/60"
+        className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 text-[11.5px] font-medium text-[color:var(--ink)] transition-colors hover:bg-[color:var(--sunken)]"
         onClick={onOpenAuth}
       >
-        <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+        <LogIn className="h-3 w-3" aria-hidden="true" />
         Sign in
       </button>
     );
   }
 
   const display = user.email ?? "Signed in";
+  const initial = userInitial(user);
 
   return (
     <div className="relative">
       <button
         type="button"
+        title={display}
         className={cn(
-          "inline-flex h-8 max-w-[180px] items-center gap-1.5 rounded-md px-2 text-xs font-medium text-zinc-700 transition-colors",
-          menuOpen
-            ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-            : "hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800/60",
+          "inline-flex items-center gap-1.5 rounded-full border border-[color:var(--line)] bg-[color:var(--card)] p-1 transition-colors",
+          menuOpen ? "bg-[color:var(--sunken)]" : "hover:bg-[color:var(--sunken)]",
         )}
         onClick={() => setMenuOpen((open) => !open)}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
+        aria-label={`Account: ${display}`}
       >
-        <UserCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span className="truncate">{display}</span>
+        <span
+          className={cn(
+            "inline-grid h-[22px] w-[22px] place-items-center rounded-full font-[family-name:var(--font-mono)] text-[10px] font-semibold text-white shadow-[0_1px_0_rgba(255,255,255,0.4)_inset]",
+            avatarGradient,
+          )}
+        >
+          {initial}
+        </span>
       </button>
       {menuOpen && (
         <>
@@ -71,18 +90,30 @@ export function AccountButton({
             onClick={() => setMenuOpen(false)}
           />
           <div
-            className="absolute right-0 top-9 z-50 w-48 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+            className="absolute right-0 top-9 z-50 w-56 overflow-hidden rounded-[var(--r)] border border-[color:var(--line)] bg-[color:var(--card)] shadow-[0_12px_28px_-8px_rgba(20,18,10,0.22)]"
             role="menu"
           >
-            <div className="border-b border-zinc-100 px-3 py-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-              Synced as
-              <div className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-200">
-                {display}
+            <div className="flex items-center gap-2.5 border-b border-[color:var(--line-soft)] px-3 py-2.5">
+              <span
+                className={cn(
+                  "inline-grid h-7 w-7 shrink-0 place-items-center rounded-full font-[family-name:var(--font-mono)] text-[11px] font-semibold text-white",
+                  avatarGradient,
+                )}
+              >
+                {initial}
+              </span>
+              <div className="min-w-0">
+                <div className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.14em] text-[color:var(--ink-3)]">
+                  Synced as
+                </div>
+                <div className="truncate text-[12px] font-medium text-[color:var(--ink)]">
+                  {display}
+                </div>
               </div>
             </div>
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-zinc-700 transition-colors hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
               onClick={() => {
                 setMenuOpen(false);
                 onSignOut();
