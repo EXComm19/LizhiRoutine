@@ -44,3 +44,8 @@ Thumbs.db
 
 # debug dumps (HAE payloads etc)
 /tmp/
+
+# personal — not part of the project
+codex_usage.json
+usage_tracker.py
+docs/ios-mvp-handoff.zip
