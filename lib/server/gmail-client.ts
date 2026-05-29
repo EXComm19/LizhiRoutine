@@ -181,11 +181,28 @@ export async function refreshGmailAccessToken(
     | GmailTokenResponse
     | null;
   if (!response.ok || !payload?.access_token) {
-    throw new Error(
+    const error = new Error(
       payload?.error_description ||
         payload?.error ||
         "Google token refresh failed.",
     );
+    // Tag refresh-token failures so callers can surface a "reconnect"
+    // UX instead of a generic 500. Google returns invalid_grant when:
+    //   - the user revoked access at myaccount.google.com/permissions
+    //   - the token was unused for 6 months
+    //   - the OAuth app is in "testing" status and a 7-day grace expired
+    //   - >50 refresh tokens issued for this user-app pair (oldest evicted)
+    //   - the user changed their Google password
+    const code = payload?.error ?? "";
+    const description = payload?.error_description ?? "";
+    if (
+      code === "invalid_grant" ||
+      /expired|revoked/i.test(description)
+    ) {
+      (error as Error & { gmailReauthRequired?: boolean }).gmailReauthRequired =
+        true;
+    }
+    throw error;
   }
 
   const updated = await updateGmailAccount(userId, account.id, {

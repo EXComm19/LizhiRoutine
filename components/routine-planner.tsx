@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { createPortal } from "react-dom";
 import {
@@ -34,6 +34,7 @@ import {
   Flag,
   Laptop,
   MapPin,
+  Minus,
   Moon,
   MoveVertical,
   Navigation,
@@ -259,6 +260,22 @@ const CALENDAR_EVENTS_HEIGHT_DEFAULT = 200;
 const CALENDAR_EVENTS_HEIGHT_MIN = 80;
 const CALENDAR_EVENTS_HEIGHT_MAX = 480;
 const HIDE_DONE_REMINDERS_STORAGE_KEY = "lizhi-routine:hide-done-reminders";
+
+// ── Day-view vertical zoom ────────────────────────────────────────────
+// Multiplier applied to pixel positions + container height in the day
+// timeline only. 1.0 = the native PIXELS_PER_HOUR layout from lib/time.ts.
+// Pulled out of context so leaf renderers (PlacedTask, DeadlineMarkers,
+// TimeGrid, etc.) read it without prop-drilling through 4 layers.
+const TIMELINE_ZOOM_STORAGE_KEY = "lizhi-routine:timeline-zoom";
+const TIMELINE_ZOOM_MIN = 0.4;
+const TIMELINE_ZOOM_MAX = 1.5;
+const TIMELINE_ZOOM_STEP = 0.1;
+const TIMELINE_ZOOM_DEFAULT = 1;
+const TimelineZoomContext = createContext<number>(1);
+function useTimelineZoom(): number {
+  return useContext(TimelineZoomContext);
+}
+
 const CATEGORY_OPTIONS: Category[] = ["T0", "T1", "T2"];
 const CALENDAR_BLOCK_CLASS =
   "border-violet-300 bg-violet-100/90 dark:border-violet-400/45 dark:bg-violet-500/25";
@@ -380,6 +397,35 @@ function saveHideDoneReminders(hide: boolean) {
   }
 }
 
+function loadSavedTimelineZoom(): number {
+  if (typeof window === "undefined") return TIMELINE_ZOOM_DEFAULT;
+  const raw = window.localStorage.getItem(TIMELINE_ZOOM_STORAGE_KEY);
+  if (!raw) return TIMELINE_ZOOM_DEFAULT;
+  const parsed = Number(raw);
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < TIMELINE_ZOOM_MIN ||
+    parsed > TIMELINE_ZOOM_MAX
+  ) {
+    return TIMELINE_ZOOM_DEFAULT;
+  }
+  return parsed;
+}
+
+function saveTimelineZoom(zoom: number) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(TIMELINE_ZOOM_STORAGE_KEY, String(zoom));
+  } catch {
+    /* per-session zoom still works */
+  }
+}
+
+function clampTimelineZoom(value: number): number {
+  if (!Number.isFinite(value)) return TIMELINE_ZOOM_DEFAULT;
+  return Math.max(TIMELINE_ZOOM_MIN, Math.min(TIMELINE_ZOOM_MAX, value));
+}
+
 function clampCalendarEventsHeight(value: number) {
   if (!Number.isFinite(value)) return CALENDAR_EVENTS_HEIGHT_DEFAULT;
   return Math.min(
@@ -447,6 +493,84 @@ export function RoutinePlanner() {
   );
   const [isHydrated, setIsHydrated] = useState(false);
   const [activeDrag, setActiveDrag] = useState<DragPayload | null>(null);
+  // Vertical scale factor for the day-view timeline. 1.0 = native pixel
+  // density (88px / hour). Smaller = more of the day fits in one screen;
+  // larger = bigger blocks for short tasks. Declared up-front (rather
+  // than alongside the other view-pref state below) because drag/drop
+  // and resize callbacks defined earlier in this component close over
+  // it — TDZ otherwise.
+  const [timelineZoom, setTimelineZoom] = useState<number>(
+    loadSavedTimelineZoom,
+  );
+  const persistTimelineZoom = useCallback((value: number) => {
+    const clamped = clampTimelineZoom(value);
+    setTimelineZoom(clamped);
+    saveTimelineZoom(clamped);
+  }, []);
+
+  // ── Day-view zoom shortcuts ──
+  // Alt + +/= / Alt + - / Alt + 0 for keyboard control; Alt + scroll
+  // wheel for mouse zoom. Alt (rather than Ctrl/Cmd) avoids hijacking
+  // the browser's own page-zoom shortcut.
+  //
+  // Skips:
+  //  - other views (zoom only applies to the day timeline)
+  //  - any other modifier held alongside Alt (so Ctrl-Alt-something
+  //    keeps working for OS / IME / accessibility)
+  //  - keystrokes while a text input is focused
+  useEffect(() => {
+    if (calendarView !== "day") return;
+
+    const isEditableTarget = () => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return false;
+      if (el.isContentEditable) return true;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    };
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (!event.altKey) return;
+      if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (isEditableTarget()) return;
+      let next: number | null = null;
+      switch (event.key) {
+        case "+":
+        case "=":
+          next = timelineZoom + TIMELINE_ZOOM_STEP;
+          break;
+        case "-":
+        case "_":
+          next = timelineZoom - TIMELINE_ZOOM_STEP;
+          break;
+        case "0":
+          next = TIMELINE_ZOOM_DEFAULT;
+          break;
+        default:
+          return;
+      }
+      event.preventDefault();
+      persistTimelineZoom(next);
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.altKey) return;
+      if (isEditableTarget()) return;
+      event.preventDefault();
+      const direction = event.deltaY < 0 ? 1 : -1;
+      persistTimelineZoom(timelineZoom + direction * TIMELINE_ZOOM_STEP);
+    };
+
+    window.addEventListener("keydown", handleKeydown);
+    // passive:false so we can preventDefault on wheel and stop the page
+    // from scrolling while Alt-zooming.
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("wheel", handleWheel);
+    };
+  }, [calendarView, persistTimelineZoom, timelineZoom]);
+
   // Two-step "replace existing sleep on drop" prompt. The first drop sets
   // this; a second drop on the same date within the window confirms a
   // replace. Ref + state both, because handleDragEnd reads it sync (avoid
@@ -1288,7 +1412,11 @@ export function RoutinePlanner() {
         destinationDate = dateKey;
       }
 
-      const rawMinutes = pixelsToMinutes(yOffset);
+      // Drop target math: when the day view is zoomed, each pixel
+      // covers fewer minutes, so divide by the active scale. Week view
+      // is unaffected (zoom doesn't apply there).
+      const dropZoom = calendarView === "day" ? timelineZoom : 1;
+      const rawMinutes = pixelsToMinutes(yOffset) / dropZoom;
       const snapped = snapMinutes(rawMinutes);
       const startMinutes = Math.max(
         0,
@@ -1300,7 +1428,7 @@ export function RoutinePlanner() {
         startMinutes,
       };
     },
-    [calendarView, getPointerPosition, selectedDate],
+    [calendarView, getPointerPosition, selectedDate, timelineZoom],
   );
 
   const handleDragEnd = useCallback(
@@ -1449,10 +1577,14 @@ export function RoutinePlanner() {
 
       if (timeline && task && hasPointerCoordinates(event.activatorEvent)) {
         const timelineRect = timeline.getBoundingClientRect();
-        const taskTop = minutesToPixels(task.topMinutes);
+        // Drag-anchor: where on the block the cursor grabbed it. Has to
+        // use the same scale as the rendered block, otherwise the drop
+        // lands offset on a zoomed day timeline.
+        const dragZoom = calendarView === "day" ? timelineZoom : 1;
+        const taskTop = minutesToPixels(task.topMinutes) * dragZoom;
         const taskHeight = Math.max(
           1,
-          minutesToPixels(task.visibleDurationMinutes),
+          minutesToPixels(task.visibleDurationMinutes) * dragZoom,
         );
         const grabOffset =
           event.activatorEvent.clientY - timelineRect.top - taskTop;
@@ -1461,7 +1593,7 @@ export function RoutinePlanner() {
     }
 
     setActiveDrag(payload);
-  }, [draggableVisibleTasks]);
+  }, [calendarView, draggableVisibleTasks, timelineZoom]);
 
   const handleDragCancel = useCallback(() => {
     setActiveDrag(null);
@@ -1485,7 +1617,11 @@ export function RoutinePlanner() {
       const endTimelineMinutes = startTimelineMinutes + startDuration;
 
       const applyResize = (clientY: number, persist: boolean) => {
-        const delta = pixelsToMinutes(clientY - pointerStartY);
+        // Resize math: how many minutes the cursor has moved. Same
+        // pixel→minute conversion the rendered block uses, so day-view
+        // zoom must divide here for the snap math to feel right.
+        const resizeZoom = calendarView === "day" ? timelineZoom : 1;
+        const delta = pixelsToMinutes(clientY - pointerStartY) / resizeZoom;
 
         if (edge === "bottom") {
           const nextEndMinutes = snapMinutes(endTimelineMinutes + delta);
@@ -1542,7 +1678,7 @@ export function RoutinePlanner() {
       window.addEventListener("pointermove", handlePointerMove);
       window.addEventListener("pointerup", handlePointerUp);
     },
-    [moveTaskToDate, updateTask, updateTasksForDay],
+    [calendarView, moveTaskToDate, timelineZoom, updateTask, updateTasksForDay],
   );
 
   const moveCalendar = useCallback(
@@ -1622,6 +1758,8 @@ export function RoutinePlanner() {
               onPrevious={() => moveCalendar(-1)}
               onNext={() => moveCalendar(1)}
               onToday={() => setSelectedDate(activeTimelineDayKey())}
+              timelineZoom={timelineZoom}
+              setTimelineZoom={persistTimelineZoom}
               accountSlot={
                 <AccountButton
                   status={auth.status}
@@ -1639,19 +1777,21 @@ export function RoutinePlanner() {
               />
             )}
             {calendarView === "day" && (
-              <Timeline
-                tasks={visibleTasks}
-                deadlines={deadlineMarkers}
-                periods={periods}
-                dateKey={selectedDate}
-                sunTimes={sunTimes}
-                now={now}
-                isOver={isOver}
-                setTimelineNode={setTimelineNode}
-                updateTask={updateTask}
-                deleteTask={deleteTask}
-                beginResize={beginResize}
-              />
+              <TimelineZoomContext.Provider value={timelineZoom}>
+                <Timeline
+                  tasks={visibleTasks}
+                  deadlines={deadlineMarkers}
+                  periods={periods}
+                  dateKey={selectedDate}
+                  sunTimes={sunTimes}
+                  now={now}
+                  isOver={isOver}
+                  setTimelineNode={setTimelineNode}
+                  updateTask={updateTask}
+                  deleteTask={deleteTask}
+                  beginResize={beginResize}
+                />
+              </TimelineZoomContext.Provider>
             )}
             {calendarView === "week" && (
               <WeekView
@@ -1856,6 +1996,9 @@ type TopBarProps = {
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
+  /** Vertical zoom for the day timeline. Controls are only rendered when the day view is active. */
+  timelineZoom: number;
+  setTimelineZoom: (value: number) => void;
   accountSlot?: React.ReactNode;
 };
 
@@ -1871,6 +2014,8 @@ function TopBar({
   onPrevious,
   onNext,
   onToday,
+  timelineZoom,
+  setTimelineZoom,
   accountSlot,
 }: TopBarProps) {
   const title = formatCalendarTitle(selectedDate, calendarView);
@@ -1954,6 +2099,13 @@ function TopBar({
       </div>
 
       <ViewSwitcher value={calendarView} onChange={setCalendarView} />
+
+      {calendarView === "day" && (
+        <TimelineZoomControl
+          value={timelineZoom}
+          onChange={setTimelineZoom}
+        />
+      )}
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         <Button
@@ -2154,6 +2306,61 @@ function ViewSwitcher({
           {view}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Vertical-zoom control for the day timeline. Three-button segmented
+ * control: − [N%] +. The number doubles as a click target that resets
+ * to 100%. Stepping is fixed at TIMELINE_ZOOM_STEP (0.1), clamped to
+ * [TIMELINE_ZOOM_MIN, TIMELINE_ZOOM_MAX]. Pressed-disabled when the
+ * current value is at the edge of the range.
+ */
+function TimelineZoomControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const atMin = value <= TIMELINE_ZOOM_MIN + 1e-6;
+  const atMax = value >= TIMELINE_ZOOM_MAX - 1e-6;
+  const percent = `${Math.round(value * 100)}%`;
+  return (
+    <div
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-[10px] border border-[color:var(--line)] bg-[color:var(--sunken)] p-[3px]"
+      title="Zoom the day timeline · Alt+scroll or Alt+ / Alt− / Alt+0"
+    >
+      <button
+        type="button"
+        className="inline-grid h-6 w-6 place-items-center rounded-[7px] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--card)] hover:text-[color:var(--ink)] disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={atMin}
+        onClick={() => onChange(value - TIMELINE_ZOOM_STEP)}
+        aria-label="Zoom out"
+        title={`Zoom out (currently ${percent})`}
+      >
+        <Minus className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        className="rounded-[7px] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[11px] font-medium tabular-nums text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--card)] hover:text-[color:var(--ink)]"
+        onClick={() => onChange(TIMELINE_ZOOM_DEFAULT)}
+        aria-label="Reset zoom to 100%"
+        title="Reset to 100%"
+      >
+        {percent}
+      </button>
+      <button
+        type="button"
+        className="inline-grid h-6 w-6 place-items-center rounded-[7px] text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--card)] hover:text-[color:var(--ink)] disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={atMax}
+        onClick={() => onChange(value + TIMELINE_ZOOM_STEP)}
+        aria-label="Zoom in"
+        title={`Zoom in (currently ${percent})`}
+      >
+        <Plus className="h-3 w-3" />
+      </button>
     </div>
   );
 }
@@ -3768,12 +3975,62 @@ function LeftRail({
   );
 }
 
+/**
+ * Lizhi Routine logo mark — stacked-blocks L on a rounded square badge.
+ * Single source of truth for the brand mark; the same geometry is in
+ * app/icon.svg (favicon) and app/apple-icon.tsx (iOS home screen).
+ *
+ * Colours invert under `dark:` so the mark stays legible in both themes
+ * the same way the original text-L badge did.
+ */
+function LogoMark({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 100 100"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect
+        width="100"
+        height="100"
+        rx="22"
+        className="fill-[#1A170E] dark:fill-[#F5EDD6]"
+      />
+      <rect
+        x="28"
+        y="18"
+        width="18"
+        height="42"
+        rx="4.5"
+        className="fill-[#F5EDD6] dark:fill-[#14110A]"
+      />
+      <rect
+        x="28"
+        y="63"
+        width="44"
+        height="16"
+        rx="4.5"
+        className="fill-[#F5EDD6] dark:fill-[#14110A]"
+      />
+      {/* Top letterpress bevel */}
+      <rect
+        x="6"
+        y="3"
+        width="88"
+        height="2"
+        rx="1"
+        fill="#ffffff"
+        className="opacity-[0.22] dark:opacity-60"
+      />
+    </svg>
+  );
+}
+
 function BrandHeader() {
   return (
     <div className="flex shrink-0 items-center gap-2.5 border-b border-[color:var(--line-soft)] px-4 pb-3.5 pt-4">
-      <div className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] bg-[#1A170E] font-[family-name:var(--font-disp)] text-[16px] font-semibold italic tracking-[-0.02em] text-[#F5EDD6] shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] dark:bg-[#F5EDD6] dark:text-[#14110A]">
-        L
-      </div>
+      <LogoMark className="h-[30px] w-[30px] shrink-0" />
       <div className="min-w-0 flex-1 truncate font-[family-name:var(--font-disp)] text-[17px] font-medium italic tracking-[-0.01em] text-[color:var(--ink)]">
         <span className="font-[family-name:var(--font-ui)] font-semibold not-italic tracking-[-0.015em]">
           Lizhi
@@ -5270,6 +5527,7 @@ function Timeline({
   beginResize,
 }: TimelineProps) {
   const currentTimeMarker = currentTimeMarkerForDate(dateKey, now);
+  const zoom = useTimelineZoom();
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--card)]">
@@ -5280,7 +5538,7 @@ function Timeline({
             "relative min-w-[520px] transition-colors",
             isOver && "bg-[color:var(--sunken)]",
           )}
-          style={{ height: TIMELINE_HEIGHT }}
+          style={{ height: TIMELINE_HEIGHT * zoom }}
         >
           <TimelineGrid sunTimes={sunTimes} />
           <div
@@ -5330,6 +5588,9 @@ function TimeGrid({
   labelClassName: string;
   sunTimes: SunTimes;
 }) {
+  // Day view provides a zoom value via TimelineZoomContext; week view
+  // doesn't, so the hook returns the default 1 there.
+  const zoom = useTimelineZoom();
   const nightBands = [
     { start: 0, end: sunTimes.sunriseOffsetMinutes },
     { start: sunTimes.sunsetOffsetMinutes, end: TOTAL_MINUTES },
@@ -5347,14 +5608,14 @@ function TimeGrid({
           className="pointer-events-none absolute right-0 border-y border-[color:var(--line-soft)] bg-[color:var(--sunken)]/35"
           style={{
             left: gutterWidth,
-            top: minutesToPixels(band.start),
-            height: minutesToPixels(band.end - band.start),
+            top: minutesToPixels(band.start) * zoom,
+            height: minutesToPixels(band.end - band.start) * zoom,
           }}
         />
       ))}
       {timelineHours().map((hour) => {
         const minutes = (hour - DAY_START_HOUR) * 60;
-        const top = minutesToPixels(minutes);
+        const top = minutesToPixels(minutes) * zoom;
         const label = formatTimelineScaleLabel(minutes);
 
         return (
@@ -5378,7 +5639,7 @@ function TimeGrid({
         );
       })}
       {Array.from({ length: TOTAL_MINUTES / SNAP_MINUTES }).map((_, index) => {
-        const top = minutesToPixels(index * SNAP_MINUTES);
+        const top = minutesToPixels(index * SNAP_MINUTES) * zoom;
         return (
           <div
             key={index}
@@ -5748,6 +6009,7 @@ function PeriodColumnBackground({
   dateKey: string;
   layout: "day" | "week";
 }) {
+  const zoom = useTimelineZoom();
   const active = useMemo(
     () => periods.filter((period) => periodActiveOnDate(period, dateKey)),
     [periods, dateKey],
@@ -5763,10 +6025,10 @@ function PeriodColumnBackground({
         return (
           <div key={period.id} className="absolute inset-0">
             {segments.map((segment, index) => {
-              const top = minutesToPixels(segment.startMinutes);
+              const top = minutesToPixels(segment.startMinutes) * zoom;
               const height = Math.max(
                 4,
-                minutesToPixels(segment.endMinutes - segment.startMinutes),
+                minutesToPixels(segment.endMinutes - segment.startMinutes) * zoom,
               );
               return (
                 <div
@@ -5812,12 +6074,13 @@ function DeadlineMarkers({
   markers: DeadlineMarker[];
   layout: "day" | "week";
 }) {
+  const zoom = useTimelineZoom();
   if (!markers.length) return null;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
       {markers.map((marker) => {
-        const top = minutesToPixels(marker.topMinutes) + marker.stackIndex * 22;
+        const top = minutesToPixels(marker.topMinutes) * zoom + marker.stackIndex * 22;
         const tooltip = `${marker.title} deadline at ${marker.timeLabel}${marker.hasExplicitTime ? "" : " (no time set)"}`;
 
         if (layout === "day") {
@@ -5900,9 +6163,10 @@ function CurrentTimeLine({
   marker: CurrentTimeMarker | null;
   layout: "day" | "week";
 }) {
+  const zoom = useTimelineZoom();
   if (!marker) return null;
 
-  const top = minutesToPixels(marker.topMinutes);
+  const top = minutesToPixels(marker.topMinutes) * zoom;
 
   if (layout === "week") {
     return (
@@ -5947,10 +6211,13 @@ function PlacedTask({
   beginResize,
 }: PlacedTaskProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const top = minutesToPixels(task.topMinutes);
+  // Day view supplies a zoom via context; week view doesn't, so the hook
+  // returns 1 there and the block lays out at native density.
+  const zoom = useTimelineZoom();
+  const top = minutesToPixels(task.topMinutes) * zoom;
   const height = Math.max(
     1,
-    minutesToPixels(task.visibleDurationMinutes),
+    minutesToPixels(task.visibleDurationMinutes) * zoom,
   );
   const styles = task.displayColor
     ? todoListColorTokens(task.displayColor)

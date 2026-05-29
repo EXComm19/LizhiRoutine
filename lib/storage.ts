@@ -66,6 +66,7 @@ const PRESERVED_LOCAL_KEYS = new Set([
   "lizhi-routine:calendar-todo-sort",
   "lizhi-routine:calendar-events-height",
   "lizhi-routine:hide-done-reminders",
+  "lizhi-routine:timeline-zoom",
   "lizhi-routine:last-synced-user-id",
 ]);
 

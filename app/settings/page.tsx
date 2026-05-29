@@ -7,6 +7,7 @@ import { TodoListsManager } from "@/components/planner/todo-lists-manager";
 import { CalendarImportPanel } from "@/components/planner/CalendarImportPanel";
 import { ExtensionTokensPanel } from "@/components/planner/ExtensionTokensPanel";
 import { SleepImportPanel } from "@/components/planner/SleepImportPanel";
+import { WeChatLinkPanel } from "@/components/planner/WeChatLinkPanel";
 import { GmailSettingsPanel } from "@/components/planner/GmailInboxPanel";
 import { parseIcsCalendar } from "@/lib/calendar-import";
 import { importCalendarEventsToStorage } from "@/lib/calendar-event-storage";
@@ -227,6 +228,7 @@ export default function SettingsPage() {
 
         <ExtensionTokensPanel />
         <SleepImportPanel />
+        <WeChatLinkPanel />
       </div>
     </main>
   );

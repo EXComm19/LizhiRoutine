@@ -46,7 +46,13 @@ export async function resolveScanContext<
   if (!user) {
     return {
       ok: false,
-      response: NextResponse.json({ error: "Not signed in." }, { status: 401 }),
+      response: NextResponse.json(
+        {
+          error: "Your session expired — sign in again to scan.",
+          code: "supabase_signed_out",
+        },
+        { status: 401 },
+      ),
     };
   }
 
@@ -81,7 +87,36 @@ export async function resolveScanContext<
     };
   }
 
-  const account = await getValidGmailAccount(user.userId, accountId, request);
+  let account: ResolvedGmailAccount | null;
+  try {
+    account = await getValidGmailAccount(user.userId, accountId, request);
+  } catch (error) {
+    // Google refresh-token failures (invalid_grant, "Token has been
+    // expired or revoked.") get tagged with `gmailReauthRequired`
+    // in lib/server/gmail-client.ts. Translate that into a 401 with a
+    // structured code so the client can route the user to Settings →
+    // Reconnect Gmail instead of showing a generic "HTTP 500".
+    const tagged = error as Error & { gmailReauthRequired?: boolean };
+    if (tagged?.gmailReauthRequired) {
+      console.warn(
+        "[lizhi-routine:gmail-scan] refresh token revoked / expired",
+        { accountId, userId: user.userId, error: tagged.message },
+      );
+      return {
+        ok: false,
+        response: NextResponse.json(
+          {
+            error:
+              "Gmail access has expired — reconnect the account in Settings.",
+            code: "gmail_reauth_required",
+            accountId,
+          },
+          { status: 401 },
+        ),
+      };
+    }
+    throw error;
+  }
   if (!account) {
     return {
       ok: false,

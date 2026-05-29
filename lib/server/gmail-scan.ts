@@ -4,6 +4,7 @@ import type {
   EmailTodoSuggestion,
 } from "@/lib/email-suggestions";
 import {
+  GmailHttpError,
   getGmailMessageSummary,
   getGmailProfile,
   listGmailHistoryMessageIds,
@@ -129,6 +130,13 @@ function isCompletedSubmissionReceipt(message: GmailMessageSummary) {
  * order of `messageIds` in the output. Gmail's users.messages.get costs 5
  * quota units / call with a per-user limit of 250/s, so ~5 in flight is a
  * comfortable default well below the threshold.
+ *
+ * Tolerates per-message 404 ("Requested entity was not found.") and 410
+ * ("Gone") — these mean the message was deleted, expunged from trash, or
+ * moved to a label we lost access to between `plan` and `run`. We log
+ * each one and return its id in `missingIds` so the caller can mark
+ * those as skipped instead of retrying forever. Any OTHER error
+ * (network, 5xx, auth) still throws — those are real failures.
  */
 async function fetchSummariesConcurrent({
   account,
@@ -138,15 +146,29 @@ async function fetchSummariesConcurrent({
   account: StoredGmailAccount;
   messageIds: string[];
   concurrency: number;
-}): Promise<GmailMessageSummary[]> {
+}): Promise<{ summaries: GmailMessageSummary[]; missingIds: string[] }> {
   const results = new Array<GmailMessageSummary | null>(messageIds.length).fill(null);
+  const missing: string[] = [];
   let cursor = 0;
 
   async function worker() {
     while (true) {
       const index = cursor++;
       if (index >= messageIds.length) return;
-      results[index] = await getGmailMessageSummary(account, messageIds[index]);
+      const messageId = messageIds[index];
+      try {
+        results[index] = await getGmailMessageSummary(account, messageId);
+      } catch (error) {
+        const isGone =
+          error instanceof GmailHttpError &&
+          (error.status === 404 || error.status === 410);
+        if (!isGone) throw error;
+        missing.push(messageId);
+        logGmailScanDebug("run:message-missing", {
+          messageId,
+          status: (error as GmailHttpError).status,
+        });
+      }
     }
   }
 
@@ -155,7 +177,12 @@ async function fetchSummariesConcurrent({
     () => worker(),
   );
   await Promise.all(workers);
-  return results.filter((item): item is GmailMessageSummary => item !== null);
+  return {
+    summaries: results.filter(
+      (item): item is GmailMessageSummary => item !== null,
+    ),
+    missingIds: missing,
+  };
 }
 
 function chunkCandidates(messages: GmailMessageSummary[]) {
@@ -290,11 +317,32 @@ export async function runGmailScanChunk({
     return { scannedMessages, parsedMessages, skippedMessages, warnings };
   }
 
-  const summaries = await fetchSummariesConcurrent({
+  const { summaries, missingIds } = await fetchSummariesConcurrent({
     account,
     messageIds: idsToFetch,
     concurrency: gmailFetchConcurrency(),
   });
+
+  // Stamp every message Gmail says is gone as "skipped" so the next plan
+  // doesn't keep re-discovering and re-failing on them. We couldn't read
+  // these messages — subjectHash falls back to empty string (DB column
+  // is nullable text), receivedAt to null.
+  for (const missingId of missingIds) {
+    skippedMessages += 1;
+    await markGmailMessageScanned(user.userId, {
+      accountId: account.id,
+      providerMessageId: missingId,
+      providerThreadId: null,
+      subjectHash: "",
+      receivedAt: null,
+      status: "skipped",
+    });
+  }
+  if (missingIds.length) {
+    warnings.push(
+      `${missingIds.length} message${missingIds.length === 1 ? "" : "s"} disappeared from Gmail between plan and run (deleted or expunged); marked skipped.`,
+    );
+  }
 
   const candidates: GmailMessageSummary[] = [];
   for (const summary of summaries) {

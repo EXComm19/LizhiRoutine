@@ -637,6 +637,12 @@ export function AgentPanel({
     chunkOf?: number;
     chunkSize?: number;
     error: string;
+    /**
+     * Server-side error code. `gmail_reauth_required` means the refresh
+     * token was revoked / expired — the rest of the scan is pointless
+     * for this account and the UI should prompt for reconnection.
+     */
+    code?: string;
   };
 
   const scanAccount = async (
@@ -651,6 +657,12 @@ export function AgentPanel({
     const failures: ScanFailure[] = [];
     let pending: string[] = [];
     let chunkLimit = 8;
+    /**
+     * When the refresh token is dead, plan/run/finalize all 401 with the
+     * same error. Skip the cascade so the failure list isn't 3 copies of
+     * the same message — one entry tells the user what's wrong.
+     */
+    let reauthRequired = false;
 
     // ── Plan ─────────────────────────────────────────────────────────
     try {
@@ -660,16 +672,30 @@ export function AgentPanel({
         body: JSON.stringify({ accountId, forceBackfill: false }),
       });
       const planPayload = (await planResponse.json().catch(() => null)) as
-        | { pendingMessageIds?: string[]; chunkLimit?: number; error?: string }
+        | {
+            pendingMessageIds?: string[];
+            chunkLimit?: number;
+            error?: string;
+            code?: string;
+          }
         | null;
       if (!planResponse.ok) {
         const message =
           planPayload?.error ?? `Plan returned HTTP ${planResponse.status}.`;
-        failures.push({ accountEmail, stage: "plan", error: message });
-        console.error("[agent-scan] plan failed", { accountEmail, error: message });
-        // Plan failure = nothing to scan, but try finalize so historyId
-        // bookkeeping isn't blocked by a transient hiccup. If finalize
-        // also fails it'll get its own entry.
+        failures.push({
+          accountEmail,
+          stage: "plan",
+          error: message,
+          code: planPayload?.code,
+        });
+        console.error("[agent-scan] plan failed", {
+          accountEmail,
+          error: message,
+          code: planPayload?.code,
+        });
+        if (planPayload?.code === "gmail_reauth_required") {
+          reauthRequired = true;
+        }
       } else {
         pending = planPayload?.pendingMessageIds ?? [];
         chunkLimit = Math.max(1, planPayload?.chunkLimit ?? 8);
@@ -679,6 +705,9 @@ export function AgentPanel({
       failures.push({ accountEmail, stage: "plan", error: message });
       console.error("[agent-scan] plan threw", { accountEmail, error });
     }
+
+    // Refresh-token dead → skip run + finalize, they'll fail the same way.
+    if (reauthRequired) return failures;
 
     const total = pending.length;
     onProgress?.(0, total);
@@ -701,7 +730,7 @@ export function AgentPanel({
         });
         if (!runResponse.ok) {
           const errBody = (await runResponse.json().catch(() => null)) as
-            | { error?: string }
+            | { error?: string; code?: string }
             | null;
           const message =
             errBody?.error ?? `Chunk returned HTTP ${runResponse.status}.`;
@@ -712,6 +741,7 @@ export function AgentPanel({
             chunkOf: chunkCount,
             chunkSize: chunk.length,
             error: message,
+            code: errBody?.code,
           });
           console.error("[agent-scan] chunk failed", {
             accountEmail,
@@ -756,14 +786,20 @@ export function AgentPanel({
       });
       if (!finalizeResponse.ok) {
         const errBody = (await finalizeResponse.json().catch(() => null)) as
-          | { error?: string }
+          | { error?: string; code?: string }
           | null;
         const message =
           errBody?.error ?? `Finalize returned HTTP ${finalizeResponse.status}.`;
-        failures.push({ accountEmail, stage: "finalize", error: message });
+        failures.push({
+          accountEmail,
+          stage: "finalize",
+          error: message,
+          code: errBody?.code,
+        });
         console.error("[agent-scan] finalize failed", {
           accountEmail,
           error: message,
+          code: errBody?.code,
         });
       }
     } catch (error) {
@@ -793,20 +829,42 @@ export function AgentPanel({
       }
       await refresh();
       if (allFailures.length > 0) {
-        // First failure is shown in full so the user actually learns
-        // what went wrong; remaining failures are flagged as a count so
-        // the banner stays one-line. Full list is already in
-        // console.error from the per-stage logging above.
-        const first = allFailures[0];
-        const where =
-          first.stage === "run"
-            ? `chunk ${first.chunkIndex}/${first.chunkOf}`
-            : first.stage;
-        const trailing =
-          allFailures.length > 1
-            ? ` (+${allFailures.length - 1} more — see devtools console)`
-            : "";
-        setBanner(`Scan ${first.accountEmail} ${where}: ${first.error}${trailing}`);
+        // Special-case the auth failures first — generic errors aren't
+        // worth surfacing when the user can't do anything else until
+        // they sign in / reconnect.
+        const signedOut = allFailures.some(
+          (f) => f.code === "supabase_signed_out",
+        );
+        const reauthAccounts = Array.from(
+          new Set(
+            allFailures
+              .filter((f) => f.code === "gmail_reauth_required")
+              .map((f) => f.accountEmail),
+          ),
+        );
+        if (signedOut) {
+          setBanner("Your session expired. Sign in again to scan.");
+        } else if (reauthAccounts.length > 0) {
+          const list = reauthAccounts.join(", ");
+          setBanner(
+            `Gmail access expired for ${list}. Reconnect in Settings → Gmail.`,
+          );
+        } else {
+          // First non-reauth failure is shown in full; rest collapsed to
+          // a count. Full list is already in console.error.
+          const first = allFailures[0];
+          const where =
+            first.stage === "run"
+              ? `chunk ${first.chunkIndex}/${first.chunkOf}`
+              : first.stage;
+          const trailing =
+            allFailures.length > 1
+              ? ` (+${allFailures.length - 1} more — see devtools console)`
+              : "";
+          setBanner(
+            `Scan ${first.accountEmail} ${where}: ${first.error}${trailing}`,
+          );
+        }
         console.error("[agent-scan] all failures", allFailures);
       }
     } finally {
