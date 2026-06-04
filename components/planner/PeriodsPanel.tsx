@@ -34,12 +34,15 @@ import {
   periodDefaultColor,
   periodKindLabel,
 } from "@/lib/period";
+import { LifeAreaSelect } from "@/components/planner/LifeAreaSelect";
 import type {
+  LifeArea,
   Period,
   PeriodBreak,
   PeriodColor,
   PeriodKind,
 } from "@/lib/schema";
+import { guessLifeArea } from "@/lib/life-area";
 import { todayKey } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +54,16 @@ const PERIOD_KIND_ORDER: ReadonlyArray<PeriodKind> = [
   "holiday",
   "custom",
 ];
+
+/** Default life area implied by a period's kind. The picker can override. */
+const PERIOD_KIND_AREA: Record<PeriodKind, LifeArea> = {
+  placement: "work",
+  work: "work",
+  internship: "work",
+  study: "academic",
+  holiday: "personal",
+  custom: "general",
+};
 
 const PERIOD_COLOR_OPTIONS: PeriodColor[] = [
   "blue",
@@ -338,11 +351,23 @@ function PeriodEditor({
   );
   const [breaks, setBreaks] = useState<PeriodBreak[]>(period?.breaks ?? []);
   const [notes, setNotes] = useState(period?.notes ?? "");
+  const [lifeArea, setLifeArea] = useState<LifeArea>(
+    period?.life_area ??
+      PERIOD_KIND_AREA[period?.kind ?? "placement"] ??
+      "general",
+  );
+  // Once the user picks an area manually, stop overriding it from kind.
+  const [lifeAreaTouched, setLifeAreaTouched] = useState(
+    Boolean(period?.life_area),
+  );
 
   const handleKindChange = (next: PeriodKind) => {
     setKind(next);
     if (!period) {
       setColor(periodDefaultColor(next));
+    }
+    if (!lifeAreaTouched) {
+      setLifeArea(PERIOD_KIND_AREA[next] ?? "general");
     }
   };
 
@@ -393,6 +418,7 @@ function PeriodEditor({
           days_of_week: daysOfWeek,
           breaks,
           notes,
+          life_area: lifeArea,
         })
       : createPeriod({
           title: title.trim(),
@@ -405,6 +431,7 @@ function PeriodEditor({
           days_of_week: daysOfWeek,
           breaks,
           notes,
+          life_area: lifeArea,
         });
     onSubmit(next);
   };
@@ -457,6 +484,27 @@ function PeriodEditor({
           </div>
           <PeriodKindPicker value={kind} onChange={handleKindChange} />
           <PeriodColorPicker value={color} onChange={setColor} />
+          <div
+            className={cn(
+              periodEditorSectionClass,
+              "flex items-center justify-between gap-3",
+            )}
+          >
+            <div>
+              <div className={periodEditorLabelClass}>Life area</div>
+              <p className="mt-1 text-[11.5px] leading-snug text-[color:var(--ink-3)]">
+                Counts toward this area in time stats. Defaults from kind.
+              </p>
+            </div>
+            <LifeAreaSelect
+              value={lifeArea}
+              onChange={(next) => {
+                setLifeArea(next);
+                setLifeAreaTouched(true);
+              }}
+              aria-label="Period life area"
+            />
+          </div>
           <PeriodDateRangeFields
             startDate={startDate}
             endDate={endDate}

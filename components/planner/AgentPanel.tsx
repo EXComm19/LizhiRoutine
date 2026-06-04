@@ -1047,19 +1047,24 @@ export function AgentPanel({
   );
 
   const addPasteItem = (messageId: string, index: number) => {
+    // Resolve + guard OUTSIDE the state updater. Calling onImport()
+    // (which setStates the parent RoutinePlanner) inside the
+    // setPasteMessages updater runs it during AgentPanel's render phase
+    // → "Cannot update a component while rendering a different
+    // component". Side effects belong here, not in the pure updater.
+    const message = pasteMessages.find((m) => m.id === messageId);
+    if (!message) return;
+    const item = message.items[index];
+    if (!item) return;
+    if ((message.itemStatuses[index] ?? "pending") !== "pending") return;
+
+    onImport([item]);
     setPasteMessages((current) =>
-      current.map((message) => {
-        if (message.id !== messageId) return message;
-        const item = message.items[index];
-        if (!item) return message;
-        const currentStatus = message.itemStatuses[index] ?? "pending";
-        if (currentStatus !== "pending") return message;
-        onImport([item]);
-        return {
-          ...message,
-          itemStatuses: { ...message.itemStatuses, [index]: "added" },
-        };
-      }),
+      current.map((m) =>
+        m.id === messageId
+          ? { ...m, itemStatuses: { ...m.itemStatuses, [index]: "added" } }
+          : m,
+      ),
     );
   };
 

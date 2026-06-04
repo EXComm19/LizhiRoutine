@@ -209,6 +209,19 @@ export type SleepStatsSummary = {
   daysBelowTargetCount: number;
 };
 
+/** Minutes spent in one life area over a date range. */
+export type LifeAreaStatRow = {
+  area: import("@/lib/schema").LifeArea;
+  minutes: number;
+  /** Share of the grand total (0-1). */
+  share: number;
+};
+
+export type LifeAreaStatsSummary = {
+  rows: LifeAreaStatRow[];
+  totalMinutes: number;
+};
+
 export type SunTimes = {
   sunriseLabel: string;
   sunsetLabel: string;

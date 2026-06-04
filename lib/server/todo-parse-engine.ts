@@ -5,6 +5,7 @@ import type {
   TodoParserListContext,
 } from "@/lib/ai-todo-parser";
 import type { Category } from "@/lib/schema";
+import { guessLifeArea, isLifeArea } from "@/lib/life-area";
 import { cleanEnvValue } from "@/lib/server/env";
 
 /**
@@ -97,7 +98,7 @@ function normalizeTodos(value: unknown): ParsedTodoCandidate[] {
   if (!Array.isArray(value)) return [];
   return value
     .slice(0, MAX_TODOS)
-    .map((item) => {
+    .map((item): ParsedTodoCandidate | null => {
       const row = item as Record<string, unknown>;
       const title = normalizeTitle(row.title);
       if (!title) return null;
@@ -123,6 +124,11 @@ function normalizeTodos(value: unknown): ParsedTodoCandidate[] {
         kind,
         durationMinutes,
         durationUncertain,
+        // Trust the model's area if valid; else keyword-guess off the
+        // title (never null — forced-guess policy).
+        lifeArea: isLifeArea(row.lifeArea)
+          ? row.lifeArea
+          : guessLifeArea(title),
       };
     })
     .filter((item): item is ParsedTodoCandidate => Boolean(item));
@@ -155,7 +161,8 @@ Return one JSON object only:
       "tags": ["optional", "short"],
       "kind": "task" | "event",
       "durationMinutes": <int or null>,
-      "durationUncertain": <true | false>
+      "durationUncertain": <true | false>,
+      "lifeArea": "academic" | "work" | "fitness" | "sleep" | "medical" | "social" | "hobby" | "chores" | "personal" | "general"
     }
   ],
   "warnings": ["optional short uncertainty notes"]
@@ -194,6 +201,47 @@ durationMinutes:
 durationUncertain:
 - For events: true when the source text did NOT give an explicit duration (you guessed 60min as a default). False when the text was specific (e.g. "9-11", "30min", "1 hour").
 - For tasks: always false.
+
+lifeArea (which part of life does this belong to — for time-spent stats):
+- "academic": lectures, classes, study, assignments, exams, coursework, anything with a course code.
+- "work": job, meetings, interviews, standups, internship, clients, career.
+- "fitness": gym, running, sport, training, physio, anything physical exercise.
+- "sleep": night sleep + naps.
+- "medical": doctor, dentist, therapy, medication, vaccinations, health admin.
+- "social": friends, family, dates, parties, dinners, hangouts, social calls.
+- "hobby": music, games, reading, side projects, creative / leisure time.
+- "chores": cleaning, laundry, groceries, errands, bills, paperwork, admin.
+- "personal": self-care, grooming, finances, anything personal not above.
+- "general": only when nothing else fits.
+- ALWAYS output a concrete value — never omit. If unsure, pick the closest, not "general".
+
+Cleaning up LMS / calendar exports (Moodle, Canvas, ELMS, Outlook, etc.):
+Pasted text from a learning-management system or calendar often mixes the
+real task name with platform noise. Extract the SIGNAL, drop the noise.
+- Course code: pull the unit/course code (e.g. BPS3061, COMP90048) wherever
+  it appears — often on a separate "… · BPS3061 Industrial Formulation S1
+  2026 PA" line — and PREFIX the title with it: "BPS3061 <task>".
+- Real task name: use the assessment / activity name, Title Cased. Strip
+  platform words that describe WHERE or HOW to submit, not WHAT the task is:
+  "submission point", "submission", "Turnitin", "Activity event",
+  "Assignment is due", "due", "Quiz", "Attempt", "Gradebook", trailing
+  campus/semester codes ("S1 2026 PA", "Tri 2"), and years.
+- Drop redundant ALL-CAPS — normalise "TEAM ROUTINE" → "Team Routine".
+- listName: the course code is a great list. Use it.
+
+Worked example. Input:
+  Friday, 19 June 2026
+  16:00
+  Activity event
+  TEAM ROUTINE submission point
+  Assignment is due · BPS3061 Industrial Formulation S1 2026 PA
+Correct output item:
+  { "title": "BPS3061 Team Routine", "listName": "BPS3061",
+    "category": "T0", "dueDate": "2026-06-19", "dueTime": "16:00",
+    "kind": "task", "durationMinutes": null, "durationUncertain": false }
+(It's a TASK — "due at 16:00" is a deadline, not a fixed-attendance event.
+ "submission point" is dropped; "TEAM ROUTINE" is Title Cased; the code
+ BPS3061 is lifted out of the metadata line into the title + list.)
 
 Other rules:
 - Output a JSON object, not an array.

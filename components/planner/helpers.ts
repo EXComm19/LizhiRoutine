@@ -15,6 +15,7 @@ import {
   type CommuteTimeStrategy,
   type DragPayload,
   type EventItem,
+  type LifeArea,
   type RoutineTemplate,
   type SleepRecord,
   type Task,
@@ -25,6 +26,7 @@ import {
 import type { CommuteEstimateResponse } from "@/lib/commute";
 import { isCommuteTemplate } from "@/lib/commute";
 import { patchTask } from "@/lib/factories";
+import { guessLifeArea } from "@/lib/life-area";
 import { loadAllDays, loadDay, saveDay } from "@/lib/storage";
 import {
   DAY_START_HOUR,
@@ -57,6 +59,7 @@ import type {
   StatsTodoRow,
   SleepStatsRow,
   SleepStatsSummary,
+  LifeAreaStatsSummary,
   SunTimes,
   TodoWithMeta,
   VisibleTask,
@@ -755,6 +758,109 @@ export function buildStatsSummary({
     routineMinutes: routineList.reduce((total, row) => total + row.minutes, 0),
     todoMinutes: todoList.reduce((total, row) => total + row.minutes, 0),
   };
+}
+
+/**
+ * Sum scheduled timeline minutes per life area over a date range. This
+ * is the payoff of the life-area system — "where did my time go".
+ *
+ * Each block resolves its area by source:
+ *   - sleep blocks                → "sleep"
+ *   - routine blocks              → template.life_area (else guess title)
+ *   - event blocks (kind=calendar)→ the EventItem.event_type
+ *   - todo blocks (kind=task)     → the owning list's life_area
+ *   - anything unresolved         → guess from the block title
+ *
+ * Imported ICS calendar blocks (kind=calendar without a backing
+ * EventItem) fall back to a title guess. Counts VISIBLE minutes so
+ * cross-midnight blocks are attributed correctly per day.
+ */
+export function buildLifeAreaStats({
+  startDate,
+  endDate,
+  todos,
+  todoLists,
+  templates,
+  events,
+}: {
+  startDate: string;
+  endDate: string;
+  todos: TodoItem[];
+  todoLists: TodoList[];
+  templates: RoutineTemplate[];
+  events: EventItem[];
+}): LifeAreaStatsSummary {
+  const start = startDate <= endDate ? startDate : endDate;
+  const end = startDate <= endDate ? endDate : startDate;
+  const todoById = new Map(todos.map((todo) => [todo.id, todo]));
+  const templateById = new Map(templates.map((t) => [t.id, t]));
+  const listById = new Map(todoLists.map((list) => [list.id, list]));
+  const eventById = new Map(events.map((event) => [event.id, event]));
+
+  const minutesByArea = new Map<LifeArea, number>();
+  const add = (area: LifeArea, minutes: number) => {
+    minutesByArea.set(area, (minutesByArea.get(area) ?? 0) + minutes);
+  };
+
+  for (const dateKey of dateKeysBetween(start, end)) {
+    const visible = visibleTasksForDate(
+      dateKey,
+      loadDay(dateKey),
+      loadDay(addDays(dateKey, -1)),
+      todoById,
+      listById,
+      templateById,
+      events,
+    );
+
+    for (const task of visible) {
+      const minutes = task.visibleDurationMinutes;
+      if (minutes <= 0) continue;
+
+      if (task.kind === "sleep") {
+        add("sleep", minutes);
+        continue;
+      }
+      if (task.kind === "routine") {
+        const template = task.source_id
+          ? templateById.get(task.source_id)
+          : null;
+        add(template?.life_area ?? guessLifeArea(task.title), minutes);
+        continue;
+      }
+      if (task.kind === "calendar") {
+        // Per-block override wins (ICS imports the user re-labelled).
+        if (task.life_area) {
+          add(task.life_area, minutes);
+          continue;
+        }
+        // Event-projected block carries the source EventItem id in
+        // source_id (synthetic id is "event:<id>"). Look it up; raw ICS
+        // imports won't resolve and fall back to a title guess.
+        const eventId = task.id.startsWith("event:")
+          ? task.id.slice("event:".length)
+          : task.source_id;
+        const event = eventId ? eventById.get(eventId) : null;
+        add(event?.event_type ?? guessLifeArea(task.title), minutes);
+        continue;
+      }
+      // kind === "task" → todo block, inherit from its list.
+      const todo = task.source_id ? todoById.get(task.source_id) : null;
+      const list = todo ? listById.get(todo.list_id) : null;
+      add(list?.life_area ?? guessLifeArea(task.title), minutes);
+    }
+  }
+
+  const total = [...minutesByArea.values()].reduce((s, m) => s + m, 0);
+  const rows = [...minutesByArea.entries()]
+    .map(([area, minutes]) => ({
+      area,
+      minutes,
+      share: total > 0 ? minutes / total : 0,
+    }))
+    .sort((a, b) => b.minutes - a.minutes);
+
+  return { rows, totalMinutes: total };
 }
 
 /**

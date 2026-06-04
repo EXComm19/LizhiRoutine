@@ -6,10 +6,12 @@ import {
   type EventItem,
   type EventStatus,
   type EventType,
+  type LifeArea,
   type Period,
   type PeriodBreak,
   type PeriodColor,
   type PeriodKind,
+  type RecurringReminder,
   type RoutineIconName,
   type RoutineTemplate,
   type Task,
@@ -17,6 +19,7 @@ import {
   type TodoList,
   type TodoListColor,
 } from "@/lib/schema";
+import { guessLifeArea } from "@/lib/life-area";
 
 function newId(prefix: string) {
   return `${prefix}-${randomId()}`;
@@ -74,6 +77,7 @@ export type CreateTaskInput = {
   source_id?: string | null;
   commute_config?: CommuteConfig | null;
   commute_estimate?: CommuteEstimate | null;
+  import_batch?: { id: string; label: string; importedAt: string };
   id?: string;
 };
 
@@ -92,6 +96,7 @@ export function createTask(input: CreateTaskInput): Task {
     source_id: input.source_id ?? null,
     commute_config: input.commute_config ?? null,
     commute_estimate: input.commute_estimate ?? null,
+    ...(input.import_batch ? { import_batch: input.import_batch } : {}),
     created_at: now,
     updated_at: now,
   };
@@ -117,12 +122,14 @@ export type CreateTemplateInput = {
   commute_enabled?: boolean;
   commute_config?: CommuteConfig | null;
   kind?: RoutineTemplate["kind"];
+  life_area?: LifeArea;
   built_in?: boolean;
   id?: string;
 };
 
 export function createTemplate(input: CreateTemplateInput): RoutineTemplate {
   const now = nowIso();
+  const kind = input.kind ?? "routine";
   return {
     id: input.id ?? newId("template"),
     schema_version: SCHEMA_VERSION,
@@ -132,8 +139,14 @@ export function createTemplate(input: CreateTemplateInput): RoutineTemplate {
       input.color ??
       (input.kind === "sleep" ? "violet" : defaultRoutineColor(input.category)),
     icon: input.icon ?? (input.kind === "sleep" ? "moon" : "zap"),
-    kind: input.kind ?? "routine",
+    kind,
     default_duration_minutes: input.default_duration_minutes,
+    // Sleep routines are always the sleep area; others honour an
+    // explicit value or fall back to a keyword guess on the title.
+    life_area:
+      kind === "sleep"
+        ? "sleep"
+        : (input.life_area ?? guessLifeArea(input.title)),
     commute_enabled: input.commute_enabled ?? Boolean(input.commute_config),
     commute_config: input.commute_config ?? null,
     built_in: input.built_in ?? false,
@@ -243,6 +256,7 @@ export function patchTodo(todo: TodoItem, patch: Partial<TodoItem>): TodoItem {
 export type CreateTodoListInput = {
   name: string;
   color: TodoList["color"];
+  life_area?: LifeArea;
   built_in?: boolean;
   id?: string;
 };
@@ -254,6 +268,9 @@ export function createTodoList(input: CreateTodoListInput): TodoList {
     schema_version: SCHEMA_VERSION,
     name: input.name.trim() || "List",
     color: input.color,
+    // A list is a life-area grouping; default by keyword on the name
+    // ("BPS3061" → academic, "Gym" → fitness), user-editable later.
+    life_area: input.life_area ?? guessLifeArea(input.name),
     built_in: input.built_in ?? false,
     created_at: now,
     updated_at: now,
@@ -301,6 +318,7 @@ export type CreatePeriodInput = {
   days_of_week?: number[];
   breaks?: PeriodBreak[];
   notes?: string;
+  life_area?: LifeArea;
   id?: string;
 };
 
@@ -319,6 +337,7 @@ export function createPeriod(input: CreatePeriodInput): Period {
     days_of_week: input.days_of_week ?? [0, 1, 2, 3, 4, 5, 6],
     breaks: input.breaks ?? [],
     notes: input.notes ?? "",
+    life_area: input.life_area ?? guessLifeArea(input.title),
     created_at: now,
     updated_at: now,
   };
@@ -386,6 +405,63 @@ export function patchEvent(
     id: event.id,
     schema_version: SCHEMA_VERSION,
     created_at: event.created_at,
+    updated_at: nowIso(),
+  };
+}
+
+export type CreateRecurringReminderInput = {
+  title: string;
+  notes?: string | null;
+  time: string;
+  days_of_week?: number[];
+  enabled?: boolean;
+  id?: string;
+};
+
+export function createRecurringReminder(
+  input: CreateRecurringReminderInput,
+): RecurringReminder {
+  const now = nowIso();
+  const cleanedDays = Array.isArray(input.days_of_week)
+    ? Array.from(
+        new Set(
+          input.days_of_week.filter(
+            (d): d is number =>
+              typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 6,
+          ),
+        ),
+      ).sort((a, b) => a - b)
+    : [0, 1, 2, 3, 4, 5, 6];
+  return {
+    id: input.id ?? newId("reminder"),
+    schema_version: SCHEMA_VERSION,
+    title: input.title.trim() || "Reminder",
+    notes:
+      typeof input.notes === "string" && input.notes.trim()
+        ? input.notes.trim().slice(0, 500)
+        : null,
+    time: input.time,
+    days_of_week: cleanedDays.length ? cleanedDays : [0, 1, 2, 3, 4, 5, 6],
+    enabled: input.enabled ?? true,
+    last_completed_date: null,
+    current_streak: 0,
+    longest_streak: 0,
+    completion_dates: [],
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+export function patchRecurringReminder(
+  reminder: RecurringReminder,
+  patch: Partial<RecurringReminder>,
+): RecurringReminder {
+  return {
+    ...reminder,
+    ...patch,
+    id: reminder.id,
+    schema_version: SCHEMA_VERSION,
+    created_at: reminder.created_at,
     updated_at: nowIso(),
   };
 }

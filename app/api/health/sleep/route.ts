@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SleepRecord } from "@/lib/schema";
 import { getUserFromExtensionRequest } from "@/lib/server/extension-auth";
 import { createServiceClient } from "@/utils/supabase/service";
+import { sendPushToUser } from "@/lib/server/web-push";
 
 export const runtime = "nodejs";
 
@@ -379,58 +380,83 @@ export async function POST(request: NextRequest) {
     ? stateRow.sleep_records
     : [];
 
-  // Dedup map keyed by source_uid. Existing records win on metadata that
-  // the source doesn't carry (id, created_at); incoming wins on the actual
-  // sleep span so a corrected record overwrites a stale one.
-  const byUid = new Map<string, SleepRecord>(
-    existing.map((record) => [record.source_uid, record]),
-  );
+  // Same-night dedup by TIME-WINDOW OVERLAP, latest-arrival wins.
+  //
+  // A single night gets tracked by multiple sources (Pillow + Apple
+  // Watch) and re-pushed by HAE several times an hour. Keying on
+  // source|start created a separate record per source and per slightly-
+  // shifted start, so the same night piled up. Instead: an incoming
+  // session REPLACES every existing record whose [start, end] window it
+  // overlaps. Because this POST is the most recent data we've seen, the
+  // incoming record always wins — exactly "the latest update is the
+  // winner". Non-overlapping sessions (an afternoon nap vs night sleep)
+  // coexist untouched.
   const now = nowIso();
+  const overlaps = (
+    aStart: number,
+    aEnd: number,
+    bStart: number,
+    bEnd: number,
+  ) => Math.max(aStart, bStart) < Math.min(aEnd, bEnd);
+
+  // Working set starts as the existing records; we mutate it per incoming.
+  let working: SleepRecord[] = [...existing];
   let inserted = 0;
-  let updated = 0;
+  let replaced = 0;
+
   for (const incomingRow of incoming) {
-    const uid = sourceUidFor(incomingRow);
+    const startMs = Date.parse(incomingRow.started_at);
+    const endMs = Date.parse(incomingRow.ended_at);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      continue;
+    }
     const duration =
       incomingRow.duration_minutes ??
       clampDurationFromSpan(incomingRow.started_at, incomingRow.ended_at);
-    const prior = byUid.get(uid);
-    if (prior) {
-      // Update in place when anything actually changed.
+
+    // Find every existing record this incoming session overlaps.
+    const overlapped: SleepRecord[] = [];
+    const kept: SleepRecord[] = [];
+    for (const record of working) {
+      const rs = Date.parse(record.started_at);
+      const re = Date.parse(record.ended_at);
       if (
-        prior.started_at !== incomingRow.started_at ||
-        prior.ended_at !== incomingRow.ended_at ||
-        prior.duration_minutes !== duration ||
-        prior.source !== incomingRow.source
+        Number.isFinite(rs) &&
+        Number.isFinite(re) &&
+        overlaps(startMs, endMs, rs, re)
       ) {
-        byUid.set(uid, {
-          ...prior,
-          started_at: incomingRow.started_at,
-          ended_at: incomingRow.ended_at,
-          duration_minutes: duration,
-          source: incomingRow.source,
-          updated_at: now,
-        });
-        updated += 1;
+        overlapped.push(record);
+      } else {
+        kept.push(record);
       }
-    } else {
-      byUid.set(uid, {
-        id: newId(),
-        schema_version: 1,
-        started_at: incomingRow.started_at,
-        ended_at: incomingRow.ended_at,
-        duration_minutes: duration,
-        source: incomingRow.source,
-        source_uid: uid,
-        created_at: now,
-        updated_at: now,
-      });
-      inserted += 1;
     }
+
+    // Preserve identity from the earliest-created overlapped record so the
+    // night keeps a stable id + "first seen" timestamp across re-syncs.
+    const anchor = overlapped
+      .slice()
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+
+    const winner: SleepRecord = {
+      id: anchor?.id ?? newId(),
+      schema_version: 1,
+      started_at: incomingRow.started_at,
+      ended_at: incomingRow.ended_at,
+      duration_minutes: duration,
+      source: incomingRow.source,
+      source_uid: sourceUidFor(incomingRow),
+      created_at: anchor?.created_at ?? now,
+      updated_at: now,
+    };
+
+    working = [...kept, winner];
+    if (overlapped.length > 0) replaced += 1;
+    else inserted += 1;
   }
 
   // Sort descending by start time so the most recent night is first when
   // the client renders. Cheap; keeps the array tidy.
-  const merged = Array.from(byUid.values()).sort((a, b) =>
+  const merged = working.sort((a, b) =>
     a.started_at < b.started_at ? 1 : a.started_at > b.started_at ? -1 : 0,
   );
 
@@ -449,10 +475,105 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Sleep deficit alert: fire-and-forget so HAE doesn't block on it.
+  // The push is opportunistic — if the user isn't subscribed or the
+  // numbers don't meet the threshold, we silently do nothing.
+  void checkSleepDeficitAndPush({
+    userId: user.userId,
+    records: merged,
+  }).catch((error) => {
+    console.warn("[lizhi-routine:sleep] deficit push failed", error);
+  });
+
   return NextResponse.json({
     inserted,
-    updated,
+    replaced,
     total: merged.length,
     warnings,
+  });
+}
+
+/**
+ * After every HAE sync, check whether the user has been under their
+ * sleep target enough to warrant a "you're undersleeping" push. Two
+ * triggers:
+ *   - Single-night gap ≥ 90 min vs target
+ *   - 3-night moving average ≥ 60 min vs target
+ *
+ * The tag is keyed on date + reason so the iPhone collapses repeats
+ * (HAE syncs hourly; we don't want 5 deficit pushes per evening).
+ */
+async function checkSleepDeficitAndPush(params: {
+  userId: string;
+  records: SleepRecord[];
+}): Promise<void> {
+  const supabase = createServiceClient();
+  if (!supabase) return;
+  const { data: stateRow } = await supabase
+    .from("user_state")
+    .select("preferences")
+    .eq("user_id", params.userId)
+    .maybeSingle<{ preferences: { sleep_target_minutes?: number } }>();
+  const target = stateRow?.preferences?.sleep_target_minutes ?? 8 * 60;
+
+  // Aggregate per-night totals attributed to wake date (matches
+  // buildSleepStats convention in helpers.ts).
+  const byNight = new Map<string, number>();
+  for (const record of params.records) {
+    const endMs = Date.parse(record.ended_at);
+    if (!Number.isFinite(endMs)) continue;
+    const wake = new Date(endMs);
+    const key =
+      wake.getFullYear() +
+      "-" +
+      String(wake.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(wake.getDate()).padStart(2, "0");
+    byNight.set(key, (byNight.get(key) ?? 0) + record.duration_minutes);
+  }
+
+  // Most recent 3 wake-dates, newest first.
+  const recent = [...byNight.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .slice(0, 3);
+  if (!recent.length) return;
+
+  const [lastNight, ...prior] = recent;
+  const SINGLE_GAP = 90; // minutes
+  const AVG_GAP = 60;
+
+  let reason: { kind: "single" | "average"; gap: number } | null = null;
+  if (target - lastNight[1] >= SINGLE_GAP) {
+    reason = { kind: "single", gap: target - lastNight[1] };
+  } else if (recent.length >= 3) {
+    const avg =
+      recent.reduce((sum, [, mins]) => sum + mins, 0) / recent.length;
+    if (target - avg >= AVG_GAP) {
+      reason = { kind: "average", gap: target - avg };
+    }
+  }
+  if (!reason) return;
+
+  const formatHrs = (m: number) => {
+    const h = Math.floor(m / 60);
+    const mm = Math.round(m % 60);
+    return `${h}h ${mm.toString().padStart(2, "0")}m`;
+  };
+  const body =
+    reason.kind === "single"
+      ? `Last night ${formatHrs(lastNight[1])} — ${formatHrs(reason.gap)} under target.`
+      : `Last 3 nights averaged ${formatHrs(
+          recent.reduce((sum, [, mins]) => sum + mins, 0) / recent.length,
+        )} — ${formatHrs(reason.gap)} under target.`;
+
+  await sendPushToUser({
+    userId: params.userId,
+    payload: {
+      title: "Sleep is slipping",
+      body,
+      url: "/",
+      // 1 push per (wake-date + kind) so hourly HAE re-imports don't spam.
+      tag: `sleep-deficit:${lastNight[0]}:${reason.kind}` + (prior.length ? "" : ""),
+    },
   });
 }

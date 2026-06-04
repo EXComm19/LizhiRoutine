@@ -10,7 +10,7 @@ export function CalendarImportPanel({
   setMessage,
   className,
 }: {
-  importCalendarText: (text: string) => void;
+  importCalendarText: (text: string, label?: string) => void;
   message: string;
   setMessage: (message: string) => void;
   className?: string;
@@ -34,7 +34,7 @@ export function CalendarImportPanel({
         setMessage("That file does not look like an .ics calendar.");
         return;
       }
-      importCalendarText(text);
+      importCalendarText(text, file.name || "Calendar file");
     } catch {
       setMessage("Could not read that calendar file.");
     } finally {
@@ -67,7 +67,7 @@ export function CalendarImportPanel({
         return;
       }
 
-      importCalendarText(payload.text);
+      importCalendarText(payload.text, trimmedUrl);
       setUrl("");
     } catch {
       setMessage(

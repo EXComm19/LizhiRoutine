@@ -7,8 +7,12 @@ import {
   Briefcase,
   CalendarPlus,
   Clock,
+  Dumbbell,
+  Gamepad2,
   HeartPulse,
+  Moon,
   Pencil,
+  Sparkles,
   Trash2,
   User,
   Users,
@@ -57,7 +61,8 @@ type Draft = {
   notes: string;
 };
 
-// Type → lucide icon. Used both in card rendering and the editor picker.
+// Life area → lucide icon. Used in card rendering + the editor picker.
+// (Exported as EVENT_TYPE_ICONS for back-compat with AgentPanel.)
 export const EVENT_TYPE_ICONS: Record<EventType, LucideIcon> = {
   general: Clock,
   medical: HeartPulse,
@@ -65,6 +70,10 @@ export const EVENT_TYPE_ICONS: Record<EventType, LucideIcon> = {
   academic: BookOpen,
   social: Users,
   personal: User,
+  fitness: Dumbbell,
+  sleep: Moon,
+  hobby: Gamepad2,
+  chores: Sparkles,
 };
 
 const dayLabelFmt = new Intl.DateTimeFormat(undefined, {

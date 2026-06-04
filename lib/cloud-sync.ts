@@ -6,6 +6,8 @@ import {
   type EventsDoc,
   type SleepRecord,
   type SleepRecordsDoc,
+  type RecurringReminder,
+  type RecurringRemindersDoc,
   type Period,
   type PeriodsDoc,
   type Preferences,
@@ -23,6 +25,7 @@ import {
   loadAllDays,
   loadEvents,
   loadPeriods,
+  loadRecurringReminders,
   loadSleepRecords,
   loadPreferences,
   loadTemplates,
@@ -34,6 +37,7 @@ import {
   writeDayLocal,
   writeEventsLocal,
   writePeriodsLocal,
+  writeRecurringRemindersLocal,
   writeSleepRecordsLocal,
   writePreferencesLocal,
   writeTemplatesLocal,
@@ -59,6 +63,8 @@ type UserStateRow = {
    * same tolerate-it-being-absent reason `events` does.
    */
   sleep_records: SleepRecord[] | null;
+  /** Migration 0012 column. */
+  recurring_reminders: RecurringReminder[] | null;
   preferences: Preferences;
   updated_at: string;
 };
@@ -125,6 +131,8 @@ function makeCloudWriter(
     events: (doc: EventsDoc) => upsertState({ events: doc.data.events }),
     sleepRecords: (doc: SleepRecordsDoc) =>
       upsertState({ sleep_records: doc.data.records }),
+    recurringReminders: (doc: RecurringRemindersDoc) =>
+      upsertState({ recurring_reminders: doc.data.reminders }),
     preferences: (doc: PreferencesDoc) =>
       upsertState({ preferences: doc.data }),
   };
@@ -210,9 +218,18 @@ function applyCloudSnapshotLocally(snapshot: {
         data: { records: stateRow.sleep_records },
       });
     }
+    if (Array.isArray(stateRow.recurring_reminders)) {
+      writeRecurringRemindersLocal({
+        schema_version: SCHEMA_VERSION,
+        updated_at: stateRow.updated_at,
+        data: { reminders: stateRow.recurring_reminders },
+      });
+    }
     if (stateRow.preferences && typeof stateRow.preferences === "object") {
       const cloudPrefs = stateRow.preferences as Partial<Preferences>;
       const autoHide = cloudPrefs.auto_hide_completed_days;
+      const agendaTime = cloudPrefs.daily_agenda_time;
+      const leadMinutes = cloudPrefs.event_reminder_lead_minutes;
       writePreferencesLocal({
         schema_version: SCHEMA_VERSION,
         updated_at: stateRow.updated_at,
@@ -224,6 +241,17 @@ function applyCloudSnapshotLocally(snapshot: {
             Number.isFinite(autoHide) &&
             autoHide >= 0
               ? Math.floor(autoHide)
+              : null,
+          daily_agenda_time:
+            typeof agendaTime === "string" &&
+            /^([01]\d|2[0-3]):[0-5]\d$/.test(agendaTime)
+              ? agendaTime
+              : null,
+          event_reminder_lead_minutes:
+            typeof leadMinutes === "number" &&
+            Number.isFinite(leadMinutes) &&
+            leadMinutes >= 0
+              ? Math.min(24 * 60, Math.floor(leadMinutes))
               : null,
           updated_at: stateRow.updated_at,
         },
@@ -247,6 +275,7 @@ async function pushLocalToCloud(client: SupabaseClient, userId: string) {
   const periods = loadPeriods();
   const events = loadEvents();
   const sleepRecords = loadSleepRecords();
+  const recurringReminders = loadRecurringReminders();
   const preferences = loadPreferences();
   const days = loadAllDays();
 
@@ -262,6 +291,7 @@ async function pushLocalToCloud(client: SupabaseClient, userId: string) {
         periods,
         events,
         sleep_records: sleepRecords,
+        recurring_reminders: recurringReminders,
         preferences,
         updated_at: nowIso(),
       },
@@ -303,6 +333,7 @@ export type SyncOnSignInResult =
         periods: number;
         events: number;
         sleepRecords: number;
+        recurringReminders: number;
         days: number;
       };
     };
@@ -351,6 +382,7 @@ export async function syncOnSignIn(
       periods: snapshot.stateRow?.periods?.length ?? 0,
       events: snapshot.stateRow?.events?.length ?? 0,
       sleepRecords: snapshot.stateRow?.sleep_records?.length ?? 0,
+      recurringReminders: snapshot.stateRow?.recurring_reminders?.length ?? 0,
       days: snapshot.dayRows.length,
     },
   };

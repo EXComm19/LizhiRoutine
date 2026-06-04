@@ -41,6 +41,7 @@ import {
   Paperclip,
   Plus,
   RefreshCcw,
+  Repeat,
   Settings,
   ShowerHead,
   Sparkles,
@@ -63,7 +64,9 @@ import type {
   CommuteTimeStrategy,
   DragPayload,
   EventItem,
+  LifeArea,
   Period,
+  RecurringReminder,
   RoutineTemplate,
   RoutineIconName,
   SleepRecord,
@@ -97,6 +100,7 @@ import {
   loadAllDays,
   loadDay,
   loadEvents,
+  loadRecurringReminders,
   loadSleepRecords,
   loadPeriods,
   loadPreferences,
@@ -104,6 +108,8 @@ import {
   loadTodoLists,
   loadTodos,
   backfillEstimateActualsOnce,
+  dedupeSleepRecordsOnce,
+  clearLegacyCalendarImportsOnce,
   migrateLegacyTodosOnce,
   saveEvents,
   saveSleepRecords,
@@ -126,6 +132,8 @@ import {
   routineColorTokens,
   todoListColorTokens,
 } from "@/lib/colors";
+import { LIFE_AREA_COLORS, LIFE_AREA_LABELS, guessLifeArea } from "@/lib/life-area";
+import { LifeAreaSelect } from "@/components/planner/LifeAreaSelect";
 import {
   EmptyState,
 } from "@/components/planner/primitives";
@@ -148,6 +156,7 @@ import {
   backfillRoutineSourceIds,
   buildCompletionStats,
   buildEstimateAccuracyStats,
+  buildLifeAreaStats,
   buildSleepStats,
   buildStatsSummary,
   clampNumber,
@@ -191,6 +200,8 @@ import {
 } from "@/components/planner/EventsPanel";
 import { PeriodsPanel } from "@/components/planner/PeriodsPanel";
 import { AgentPanel } from "@/components/planner/AgentPanel";
+import { RecurringRemindersPanel } from "@/components/planner/RecurringRemindersPanel";
+import { RecurringRemindersStatsSection } from "@/components/planner/RecurringRemindersStatsSection";
 import {
   EstimateAccuracyLine,
   TodoContextPanel,
@@ -229,6 +240,7 @@ import {
   formatDayLabel,
   formatDuration,
   formatTimeFromMinutes,
+  formatWallClockHm,
   minutesFromStart,
   minutesToPixels,
   wallTimeToTimelineMinutes,
@@ -485,6 +497,9 @@ export function RoutinePlanner() {
   const [periods, setPeriods] = useState<Period[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [sleepRecords, setSleepRecords] = useState<SleepRecord[]>([]);
+  const [recurringReminders, setRecurringReminders] = useState<
+    RecurringReminder[]
+  >([]);
   const [sleepTargetMinutes, setSleepTargetMinutes] = useState(8 * 60);
   // null = auto-hide off; 0 = hide on completion; positive = hide N days after.
   // Hydrated from loadPreferences() after mount.
@@ -635,6 +650,10 @@ export function RoutinePlanner() {
   );
   const [isDarkMode, setIsDarkMode] = useState(loadSavedTheme);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  // Topbar Repeat icon opens this modal. Lifted to Planner root so we
+  // can render the modal once at the layout level and avoid re-mount
+  // when the topbar re-renders for view switches.
+  const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
   const auth = useAuth();
   const cloudRevision = auth.dataRevision;
   const dragAnchorOffsetRef = useRef(0);
@@ -827,6 +846,8 @@ export function RoutinePlanner() {
       // call on every refresh because they early-return.
       migrateLegacyTodosOnce();
       backfillEstimateActualsOnce();
+      dedupeSleepRecordsOnce();
+      clearLegacyCalendarImportsOnce();
 
       let loadedCurrentTasks = loadDay(selectedDate);
       const loadedTemplates = loadTemplates();
@@ -843,6 +864,7 @@ export function RoutinePlanner() {
       setPeriods(loadPeriods());
       setEvents(loadEvents());
       setSleepRecords(loadSleepRecords());
+      setRecurringReminders(loadRecurringReminders());
       const prefs = loadPreferences();
       setSleepTargetMinutes(prefs.sleep_target_minutes);
       setAutoHideCompletedDays(prefs.auto_hide_completed_days);
@@ -854,6 +876,53 @@ export function RoutinePlanner() {
   useEffect(() => {
     refreshPlannerState();
   }, [refreshPlannerState, cloudRevision]);
+
+  // ── Recurring-reminder check-off via push notification ──
+  // The SW navigates to /?check_reminder=<id> when the user taps a
+  // reminder push. We POST to /api/recurring-reminders/check, then
+  // strip the query param so a reload doesn't replay the action.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("check_reminder");
+    if (!id) return;
+    // Clear the param immediately to avoid double-fire on hot-reload.
+    params.delete("check_reminder");
+    const next =
+      window.location.pathname +
+      (params.toString() ? `?${params}` : "") +
+      window.location.hash;
+    window.history.replaceState({}, "", next);
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/recurring-reminders/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              already?: boolean;
+              current_streak?: number;
+              error?: string;
+            }
+          | null;
+        if (!response.ok) {
+          console.warn("[reminder-check] failed", payload?.error);
+          return;
+        }
+        // Streak is server-side now. The planner itself doesn't show
+        // streaks (only Settings → Recurring reminders does); next
+        // time the user opens Settings the new value loads.
+        console.log("[reminder-check] streak =", payload?.current_streak);
+      } catch (error) {
+        console.warn("[reminder-check] threw", error);
+      }
+    })();
+    // Mount-only: only fires on first render to consume any query
+    // param the SW pushed in via the notification URL.
+  }, []);
 
   /**
    * The toolbar's Refresh button used to only re-read localStorage, which
@@ -1745,7 +1814,7 @@ export function RoutinePlanner() {
             onReset={() => resetPane("left")}
           />
 
-          <section className="flex min-h-0 min-w-[520px] flex-1 flex-col overflow-hidden rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)]">
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--r-lg)] border border-[color:var(--line)] bg-[color:var(--card)] sm:min-w-[520px]">
             <TopBar
               selectedDate={selectedDate}
               calendarView={calendarView}
@@ -1760,6 +1829,7 @@ export function RoutinePlanner() {
               onToday={() => setSelectedDate(activeTimelineDayKey())}
               timelineZoom={timelineZoom}
               setTimelineZoom={persistTimelineZoom}
+              onOpenReminderModal={() => setIsReminderModalOpen(true)}
               accountSlot={
                 <AccountButton
                   status={auth.status}
@@ -1823,8 +1893,10 @@ export function RoutinePlanner() {
                 todos={todos}
                 todoLists={todoLists}
                 templates={templates}
+                events={events}
                 sleepRecords={sleepRecords}
                 sleepTargetMinutes={sleepTargetMinutes}
+                recurringReminders={recurringReminders}
                 dataRevision={dataRevision}
               />
             )}
@@ -1885,6 +1957,11 @@ export function RoutinePlanner() {
         authError={auth.authError}
         clearError={auth.clearError}
       />
+      {isReminderModalOpen && (
+        <RecurringRemindersModal
+          onClose={() => setIsReminderModalOpen(false)}
+        />
+      )}
       <SyncConflictDialog
         conflict={auth.syncConflict}
         onResolve={auth.resolveConflict}
@@ -1999,6 +2076,7 @@ type TopBarProps = {
   /** Vertical zoom for the day timeline. Controls are only rendered when the day view is active. */
   timelineZoom: number;
   setTimelineZoom: (value: number) => void;
+  onOpenReminderModal: () => void;
   accountSlot?: React.ReactNode;
 };
 
@@ -2016,6 +2094,7 @@ function TopBar({
   onToday,
   timelineZoom,
   setTimelineZoom,
+  onOpenReminderModal,
   accountSlot,
 }: TopBarProps) {
   const title = formatCalendarTitle(selectedDate, calendarView);
@@ -2050,7 +2129,10 @@ function TopBar({
   }, [isDatePickerOpen]);
 
   return (
-    <header className="flex shrink-0 items-center gap-3.5 border-b border-[color:var(--line-soft)] px-[18px] py-3">
+    // flex-wrap + gap-y so on narrow screens the right-hand action
+    // cluster (theme, refresh, Today, account, settings) drops to a
+    // second row instead of disappearing off-screen.
+    <header className="flex shrink-0 flex-wrap items-center gap-x-3.5 gap-y-2 border-b border-[color:var(--line-soft)] px-3 py-3 sm:px-[18px]">
       <div className="flex shrink-0 items-center gap-1">
         <button
           type="button"
@@ -2100,14 +2182,21 @@ function TopBar({
 
       <ViewSwitcher value={calendarView} onChange={setCalendarView} />
 
+      {/* Zoom control is desktop-only — at phone widths there's no room
+          and pinch-to-zoom isn't wired here either. */}
       {calendarView === "day" && (
-        <TimelineZoomControl
-          value={timelineZoom}
-          onChange={setTimelineZoom}
-        />
+        <div className="hidden md:block">
+          <TimelineZoomControl
+            value={timelineZoom}
+            onChange={setTimelineZoom}
+          />
+        </div>
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {/* Theme + Refresh hidden on mobile to make room for the
+            critical Account + Settings buttons. Theme is still
+            accessible via OS dark-mode preference. */}
         <Button
           type="button"
           variant="ghost"
@@ -2115,6 +2204,7 @@ function TopBar({
           onClick={onToggleTheme}
           aria-label={isDarkMode ? "Use light mode" : "Use dark mode"}
           title={isDarkMode ? "Light mode" : "Dark mode"}
+          className="hidden sm:inline-flex"
         >
           {isDarkMode ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
         </Button>
@@ -2125,13 +2215,36 @@ function TopBar({
           onClick={onRefresh}
           title="Refresh data"
           aria-label="Refresh data"
+          className="hidden sm:inline-flex"
         >
           <RefreshCcw className="h-3.5 w-3.5" />
         </Button>
         <Button type="button" variant="primary" onClick={onToday}>
           Today
         </Button>
+        {/* Recurring reminders — opens a modal with the manage UI. */}
+        <button
+          type="button"
+          onClick={onOpenReminderModal}
+          className="inline-grid h-7 w-7 shrink-0 place-items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+          aria-label="Recurring reminders"
+          title="Recurring reminders"
+        >
+          <Repeat className="h-3.5 w-3.5" />
+        </button>
         {accountSlot}
+        {/* Settings entry — BrandHeader's gear icon lives inside the
+            LeftRail which is hidden on mobile, so we mirror it here so
+            phones can still reach /settings (where Push, WeChat link,
+            Sleep import etc. all live). */}
+        <NextLink
+          href="/settings"
+          className="inline-grid h-7 w-7 shrink-0 place-items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </NextLink>
       </div>
     </header>
   );
@@ -2386,16 +2499,20 @@ function StatsView({
   todos,
   todoLists,
   templates,
+  events,
   sleepRecords,
   sleepTargetMinutes,
+  recurringReminders,
   dataRevision,
 }: {
   selectedDate: string;
   todos: TodoItem[];
   todoLists: TodoList[];
   templates: RoutineTemplate[];
+  events: EventItem[];
   sleepRecords: SleepRecord[];
   sleepTargetMinutes: number;
+  recurringReminders: RecurringReminder[];
   dataRevision: number;
 }) {
   const initialStart = startOfWeek(selectedDate);
@@ -2438,6 +2555,18 @@ function StatsView({
       sleepTargetMinutes,
     });
   }, [dataRevision, endDate, sleepRecords, sleepTargetMinutes, startDate]);
+
+  const lifeAreaStats = useMemo(() => {
+    void dataRevision;
+    return buildLifeAreaStats({
+      startDate,
+      endDate,
+      todos,
+      todoLists,
+      templates,
+      events,
+    });
+  }, [dataRevision, endDate, events, startDate, templates, todoLists, todos]);
 
   const totalMinutes = summary.routineMinutes + summary.todoMinutes;
   const maxRoutineMinutes = Math.max(
@@ -2520,6 +2649,18 @@ function StatsView({
           <StatsMetric label="Routine library" value={formatStatsHours(summary.routineMinutes)} />
           <StatsMetric label="Todo items" value={formatStatsHours(summary.todoMinutes)} />
         </div>
+
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-lg font-semibold text-[color:var(--ink)]">
+            Where your time went
+          </div>
+          <div className="text-xs text-[color:var(--ink-2)]">
+            Scheduled timeline minutes grouped by life area. Todos
+            inherit their list&apos;s area; routines, events, and sleep
+            carry their own.
+          </div>
+        </div>
+        <LifeAreaStatsSection summary={lifeAreaStats} />
 
         <div className="grid gap-4 xl:grid-cols-2">
           <StatsPanel title="Routine blocks">
@@ -2660,6 +2801,18 @@ function StatsView({
           summary={sleepStats}
           sleepTargetMinutes={sleepTargetMinutes}
         />
+
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-lg font-semibold text-[color:var(--ink)]">
+            Streaks
+          </div>
+          <div className="text-xs text-[color:var(--ink-2)]">
+            One row per recurring reminder. Each square is a day —
+            green = checked off, faded red = scheduled but missed,
+            grey = not a scheduled day.
+          </div>
+        </div>
+        <RecurringRemindersStatsSection reminders={recurringReminders} />
       </div>
     </section>
   );
@@ -3049,6 +3202,73 @@ function CategoryCompletionBreakdown({
  * morning. Color encodes target proximity so a glance at the chart shows
  * weeks of "on target" vs "under" without reading numbers.
  */
+/**
+ * Horizontal stacked-share bar + per-area rows for the "Where your time
+ * went" section. Reuses the TodoListColor palette (via LIFE_AREA_COLORS)
+ * so the colors line up with the rest of the app.
+ */
+function LifeAreaStatsSection({
+  summary,
+}: {
+  summary: import("@/components/planner/types").LifeAreaStatsSummary;
+}) {
+  if (summary.totalMinutes === 0) {
+    return (
+      <StatsPanel title="By area">
+        <StatsEmpty text="No scheduled blocks in this range yet. Place todos, routines, or events on the timeline to see where time goes." />
+      </StatsPanel>
+    );
+  }
+
+  return (
+    <StatsPanel title="By area">
+      {/* Single stacked share bar across the top. */}
+      <div className="mb-4 flex h-3 w-full overflow-hidden rounded-full bg-[color:var(--sunken)]">
+        {summary.rows.map((row) => {
+          const tokens = todoListColorTokens(LIFE_AREA_COLORS[row.area]);
+          return (
+            <div
+              key={row.area}
+              className={cn("h-full", tokens.accent)}
+              style={{ width: `${Math.max(0.5, row.share * 100)}%` }}
+              title={`${LIFE_AREA_LABELS[row.area]} · ${formatStatsHours(row.minutes)} · ${Math.round(row.share * 100)}%`}
+            />
+          );
+        })}
+      </div>
+
+      {/* Per-area rows: dot + label + bar + hours + %. */}
+      <div className="flex flex-col gap-2.5">
+        {summary.rows.map((row) => {
+          const tokens = todoListColorTokens(LIFE_AREA_COLORS[row.area]);
+          return (
+            <div key={row.area} className="flex items-center gap-3">
+              <span
+                className={cn("h-2.5 w-2.5 shrink-0 rounded-full", tokens.accent)}
+              />
+              <span className="w-20 shrink-0 text-[12.5px] font-medium text-[color:var(--ink)]">
+                {LIFE_AREA_LABELS[row.area]}
+              </span>
+              <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-[color:var(--sunken)]">
+                <div
+                  className={cn("h-full rounded-full", tokens.accent)}
+                  style={{ width: `${Math.max(2, row.share * 100)}%` }}
+                />
+              </div>
+              <span className="w-14 shrink-0 text-right font-[family-name:var(--font-mono)] text-[11.5px] tabular-nums text-[color:var(--ink-2)]">
+                {formatStatsHours(row.minutes)}
+              </span>
+              <span className="w-9 shrink-0 text-right font-[family-name:var(--font-mono)] text-[11px] tabular-nums text-[color:var(--ink-3)]">
+                {Math.round(row.share * 100)}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </StatsPanel>
+  );
+}
+
 function SleepStatsSection({
   summary,
   sleepTargetMinutes,
@@ -3117,7 +3337,7 @@ function SleepStatsSection({
               return (
                 <div
                   key={day.dateKey}
-                  className="flex flex-1 flex-col items-center justify-end"
+                  className="flex h-full flex-1 flex-col items-center justify-end"
                   title={`${day.dateKey} · ${formatHrs(day.minutes)}${
                     day.minutes < sleepTargetMinutes && day.minutes > 0
                       ? ` · ${formatHrs(
@@ -3174,7 +3394,7 @@ function CompletionDailyChart({
           return (
             <div
               key={day.dateKey}
-              className="flex flex-1 flex-col items-center justify-end"
+              className="flex h-full flex-1 flex-col items-center justify-end"
               title={`${day.dateKey} · ${day.count} completed`}
             >
               <div
@@ -3676,6 +3896,9 @@ function LeftRail({
         const list = createTodoList({
           name: item.listName,
           color: colorForImportedList(item.listName),
+          // Seed the new list's life area from the item the parser
+          // classified — so todos landing in it inherit the right area.
+          life_area: item.lifeArea,
         });
         listByName.set(key, list);
         upsertTodoList(list);
@@ -3706,6 +3929,7 @@ function LeftRail({
               starts_at: startsAt,
               duration_minutes: item.durationMinutes ?? 60,
               duration_uncertain: item.durationUncertain,
+              event_type: item.lifeArea,
               tags: item.tags,
             }),
           );
@@ -4024,6 +4248,35 @@ function LogoMark({ className }: { className?: string }) {
         className="opacity-[0.22] dark:opacity-60"
       />
     </svg>
+  );
+}
+
+/**
+ * Recurring reminders manager wrapped in the planner's EditorModal so
+ * the same UI lives in one place — was floating in Settings before,
+ * but it's a daily-driver feature, not a one-time config, so it gets
+ * a topbar entry instead.
+ */
+function RecurringRemindersModal({ onClose }: { onClose: () => void }) {
+  return (
+    <EditorModal onClose={onClose}>
+      <div className="relative">
+        {/* Float a close ✕ over the panel — the panel renders its own
+            <section> card surface so we don't add another bg wrapper. */}
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-3 top-3 z-10 inline-grid h-6 w-6 place-items-center rounded-[var(--r-sm)] bg-[color:var(--card)] text-[color:var(--ink-3)] transition-colors hover:bg-[color:var(--sunken)] hover:text-[color:var(--ink)]"
+          aria-label="Close"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+        {/* Panel has its own mt-5 which we don't want inside a modal. */}
+        <div className="-mt-5">
+          <RecurringRemindersPanel />
+        </div>
+      </div>
+    </EditorModal>
   );
 }
 
@@ -4849,6 +5102,7 @@ function RightRail({
                 default_duration_minutes: draft.default_duration_minutes,
                 commute_enabled: draft.commute_enabled,
                 commute_config: null,
+                life_area: draft.life_area,
                 kind: "routine",
               }),
             );
@@ -4907,6 +5161,7 @@ type RoutineDraft = {
   color: TodoListColor;
   icon: RoutineIconName;
   commute_enabled: boolean;
+  life_area: LifeArea;
   kind?: "routine";
 };
 
@@ -4930,6 +5185,14 @@ function RoutineTemplateEditor({
   const [category, setCategory] = useState<Category>(template?.category ?? "T0");
   const [color, setColor] = useState<TodoListColor>(template?.color ?? "blue");
   const [icon, setIcon] = useState<RoutineIconName>(template?.icon ?? "zap");
+  const [lifeArea, setLifeArea] = useState<LifeArea>(
+    template?.life_area ?? guessLifeArea(template?.title ?? ""),
+  );
+  // Track whether the user manually picked an area, so we stop
+  // auto-guessing from the title once they have.
+  const [lifeAreaTouched, setLifeAreaTouched] = useState(
+    Boolean(template?.life_area),
+  );
   const [isCommute, setIsCommute] = useState(
     Boolean(template && isCommuteTemplate(template)),
   );
@@ -5001,13 +5264,37 @@ function RoutineTemplateEditor({
               className="h-9 w-full rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 text-[13px] font-medium text-[color:var(--ink)] outline-none transition-colors placeholder:text-[color:var(--ink-3)] focus:border-[color:var(--line-strong)] focus:bg-[color:var(--card)] focus:ring-2 focus:ring-[color:var(--ring)]"
               placeholder="Routine name"
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                if (!lifeAreaTouched) {
+                  setLifeArea(guessLifeArea(event.target.value));
+                }
+              }}
             />
           </label>
 
           <div className="border-b border-[color:var(--line-soft)] py-3.5">
             <div className={cn(EDITOR_LABEL_CLASS, "mb-2.5")}>Tier</div>
             <EditorTierSegment value={category} onChange={setCategory} />
+          </div>
+
+          <div className="border-b border-[color:var(--line-soft)] py-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className={EDITOR_LABEL_CLASS}>Life area</div>
+                <p className="mt-1 text-[11.5px] leading-snug text-[color:var(--ink-3)]">
+                  Which part of life this counts toward in time stats.
+                </p>
+              </div>
+              <LifeAreaSelect
+                value={lifeArea}
+                onChange={(next) => {
+                  setLifeArea(next);
+                  setLifeAreaTouched(true);
+                }}
+                aria-label="Routine life area"
+              />
+            </div>
           </div>
 
           <div className="border-b border-[color:var(--line-soft)] py-3.5">
@@ -5161,6 +5448,7 @@ function RoutineTemplateEditor({
                   color,
                   icon,
                   commute_enabled: isCommute,
+                  life_area: lifeArea,
                   kind: "routine",
                 })
               }
@@ -5235,6 +5523,7 @@ function RoutineTemplateCard({
               icon: nextTemplate.icon,
               commute_enabled: nextTemplate.commute_enabled,
               commute_config: null,
+              life_area: nextTemplate.life_area,
             }),
           );
           setIsEditing(false);
@@ -5535,7 +5824,7 @@ function Timeline({
         <div
           ref={setTimelineNode}
           className={cn(
-            "relative min-w-[520px] transition-colors",
+            "relative transition-colors sm:min-w-[520px]",
             isOver && "bg-[color:var(--sunken)]",
           )}
           style={{ height: TIMELINE_HEIGHT * zoom }}
@@ -5830,14 +6119,23 @@ function MonthView({
           const isSelected = day.dateKey === selectedDate;
           const isToday = day.dateKey === todayKey();
           const inMonth = isSameMonth(day.dateKey, selectedDate);
-          const visibleEvents = day.tasks.slice(0, 3);
+          // A sleep session that crosses the 5am day boundary is split into
+          // two slices (a "night" start slice + a "morning" continuation
+          // slice) that land in adjacent day windows. In the month grid that
+          // surfaces the same sleep twice. Collapse it to a single entry by
+          // dropping the continuation slice — each sleep shows once, in the
+          // cell of the night it began. The timeline keeps both slices.
+          const cellTasks = day.tasks.filter(
+            (task) => !(task.kind === "sleep" && task.continuesBefore),
+          );
+          const visibleEvents = cellTasks.slice(0, 3);
           const visibleDeadlines = day.deadlines.slice(
             0,
             Math.max(0, 3 - visibleEvents.length),
           );
           const hiddenCount = Math.max(
             0,
-            day.tasks.length +
+            cellTasks.length +
               day.deadlines.length -
               visibleEvents.length -
               visibleDeadlines.length,
@@ -5941,7 +6239,10 @@ function MonthView({
                             : "text-[color:var(--ink-3)]",
                         )}
                       >
-                        {formatTimeFromMinutes(task.topMinutes)}
+                        {task.kind === "sleep" && task.start_time
+                          ? (formatWallClockHm(task.start_time) ??
+                            formatTimeFromMinutes(task.topMinutes))
+                          : formatTimeFromMinutes(task.topMinutes)}
                       </span>
                       {task.displayIcon ? (
                         <RoutineIcon
@@ -6227,10 +6528,43 @@ function PlacedTask({
   const isContinuation = task.continuesBefore || task.continuesAfter;
   const canEdit = !isLocked;
   const isWeekLayout = layout === "week";
-  const startLabel = formatTimeFromMinutes(task.topMinutes);
-  const endLabel = formatTimeFromMinutes(
+  // At < 1 timeline zoom, the block gets shorter but native-pixel text
+  // + padding would overflow / clip. Apply CSS `zoom` on an inner
+  // wrapper so the ENTIRE content (text + padding) reflows at the
+  // smaller scale. Match zoom 1:1 so content always fits the block —
+  // accept that text gets small at extreme zoom-outs (still legible
+  // on retina, and the user is deliberately previewing the whole day
+  // at that scale, not reading details).
+  const contentZoom = Math.min(1, zoom);
+  const innerZoomStyle: React.CSSProperties | undefined =
+    !isWeekLayout && contentZoom < 1 ? { zoom: contentZoom } : undefined;
+  // Padding pulled into the inner zoom-scaled wrapper for day view so
+  // it shrinks proportionally with the text. Week view keeps padding
+  // on the outer DraggableBlock since there's no zoom there.
+  const dayPaddingClass = hasTopDeadline
+    ? "px-4 pr-5 pb-2 pt-6"
+    : "px-4 pr-5 py-2.5";
+  // Sleep (and any cross-5am block) gets clipped at the window edge, so the
+  // slice's topMinutes would read "05:00" instead of the true bedtime/wake.
+  // For sleep, label from the real session window (start_time + full
+  // duration) so both slices show the continuous span the user actually
+  // slept, not the 5am boundary. See the day-window note in lib/time.ts.
+  let startLabel = formatTimeFromMinutes(task.topMinutes);
+  let endLabel = formatTimeFromMinutes(
     task.topMinutes + task.visibleDurationMinutes,
   );
+  if (isSleep && task.start_time) {
+    const realStart = formatWallClockHm(task.start_time);
+    const realEnd = formatWallClockHm(
+      new Date(
+        new Date(task.start_time).getTime() + task.duration_minutes * 60_000,
+      ).toISOString(),
+    );
+    if (realStart && realEnd) {
+      startLabel = realStart;
+      endLabel = realEnd;
+    }
+  }
   const mutedTextClass = isSleep
     ? "text-white/70"
     : "text-[color:var(--ink-2)]";
@@ -6355,8 +6689,10 @@ function PlacedTask({
         }}
         className={cn(
           "h-full overflow-hidden",
-          isWeekLayout ? "pr-1.5" : "px-4 pr-5",
-          hasTopDeadline ? "pb-2 pt-6" : isWeekLayout ? "py-1.5" : "py-2.5",
+          // Week view keeps its tiny padding on the outer block.
+          // Day view moves padding into the zoom-scaled inner wrapper
+          // below so padding shrinks alongside text at low zoom.
+          isWeekLayout && "pr-1.5 py-1.5",
           task.kind === "calendar" &&
             (task.displayIsEvent ? EVENT_BLOCK_CLASS : CALENDAR_BLOCK_CLASS),
           isSleep && SLEEP_BLOCK_CLASS,
@@ -6384,7 +6720,13 @@ function PlacedTask({
             </span>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-3 leading-none">
+          <div
+            style={innerZoomStyle}
+            className={cn(
+              "flex min-w-0 items-center gap-3 leading-none",
+              dayPaddingClass,
+            )}
+          >
             <div className="flex min-w-0 items-center gap-2.5">
               <span
                 className={cn(

@@ -1,5 +1,6 @@
 import { defaultTemplates, defaultTodoLists } from "@/lib/default-data";
 import { createTodo } from "@/lib/factories";
+import { guessLifeArea, isLifeArea } from "@/lib/life-area";
 import { todayKey } from "@/lib/time";
 import {
   SCHEMA_VERSION,
@@ -28,6 +29,8 @@ import {
   type EventType,
   type SleepRecord,
   type SleepRecordsDoc,
+  type RecurringReminder,
+  type RecurringRemindersDoc,
   type TodoContextDoc,
   type TodoEstimate,
   type TodoEstimateSnapshot,
@@ -47,6 +50,7 @@ const TODO_LISTS_KEY = "lizhi-routine:todo-lists";
 const PERIODS_KEY = "lizhi-routine:periods";
 const EVENTS_KEY = "lizhi-routine:events";
 const SLEEP_RECORDS_KEY = "lizhi-routine:sleep-records";
+const RECURRING_REMINDERS_KEY = "lizhi-routine:recurring-reminders";
 /**
  * localStorage keys that survive clearAllLocalState() — used when we pull
  * a fresh snapshot from the cloud or sign out and want to reset user data
@@ -83,6 +87,7 @@ export type CloudWriter = {
   periods: (doc: PeriodsDoc) => void;
   events: (doc: EventsDoc) => void;
   sleepRecords: (doc: SleepRecordsDoc) => void;
+  recurringReminders: (doc: RecurringRemindersDoc) => void;
   preferences: (doc: PreferencesDoc) => void;
 };
 
@@ -156,6 +161,10 @@ export function localHasUserData(): boolean {
   if (window.localStorage.getItem(SLEEP_RECORDS_KEY)) {
     const records = loadSleepRecords();
     if (records.length > 0) return true;
+  }
+  if (window.localStorage.getItem(RECURRING_REMINDERS_KEY)) {
+    const reminders = loadRecurringReminders();
+    if (reminders.length > 0) return true;
   }
   if (window.localStorage.getItem(TEMPLATES_KEY)) {
     const templates = loadTemplates();
@@ -411,9 +420,25 @@ function migrateTask(task: unknown): Task | null {
           : null,
     commute_config: migrateCommuteConfig(t.commute_config),
     commute_estimate: migrateCommuteEstimate(t.commute_estimate),
+    ...(isLifeArea(t.life_area) ? { life_area: t.life_area } : {}),
+    ...(isImportBatch(t.import_batch)
+      ? { import_batch: t.import_batch }
+      : {}),
     created_at: typeof t.created_at === "string" ? t.created_at : now,
     updated_at: typeof t.updated_at === "string" ? t.updated_at : now,
   };
+}
+
+function isImportBatch(
+  value: unknown,
+): value is { id: string; label: string; importedAt: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const b = value as Record<string, unknown>;
+  return (
+    typeof b.id === "string" &&
+    typeof b.label === "string" &&
+    typeof b.importedAt === "string"
+  );
 }
 
 function migrateTemplate(template: unknown): RoutineTemplate | null {
@@ -447,6 +472,12 @@ function migrateTemplate(template: unknown): RoutineTemplate | null {
       typeof t.default_duration_minutes === "number"
         ? t.default_duration_minutes
         : 60,
+    life_area:
+      kind === "sleep"
+        ? "sleep"
+        : isLifeArea(t.life_area)
+          ? t.life_area
+          : guessLifeArea(t.title),
     commute_enabled:
       Boolean(t.commute_enabled) || Boolean(migrateCommuteConfig(t.commute_config)),
     commute_config: migrateCommuteConfig(t.commute_config),
@@ -678,6 +709,9 @@ function migratePeriod(value: unknown): Period | null {
     days_of_week: days.length ? days : [0, 1, 2, 3, 4, 5, 6],
     breaks,
     notes: typeof p.notes === "string" ? p.notes : "",
+    life_area: isLifeArea(p.life_area)
+      ? p.life_area
+      : guessLifeArea(p.title),
     created_at: typeof p.created_at === "string" ? p.created_at : now,
     updated_at: typeof p.updated_at === "string" ? p.updated_at : now,
   };
@@ -731,7 +765,9 @@ function migrateEvent(value: unknown): EventItem | null {
     starts_at: e.starts_at,
     duration_minutes: Math.max(5, Math.round(e.duration_minutes)),
     duration_uncertain: e.duration_uncertain === true,
-    event_type: isEventType(e.event_type) ? e.event_type : "general",
+    event_type: isEventType(e.event_type)
+      ? e.event_type
+      : guessLifeArea(typeof e.title === "string" ? e.title : ""),
     notes:
       typeof e.notes === "string" && e.notes.trim()
         ? e.notes.trim().slice(0, 2000)
@@ -754,6 +790,9 @@ function migrateTodoList(list: unknown): TodoList | null {
     schema_version: SCHEMA_VERSION,
     name: l.name,
     color: isTodoListColor(l.color) ? l.color : "blue",
+    life_area: isLifeArea(l.life_area)
+      ? l.life_area
+      : guessLifeArea(l.name),
     built_in: Boolean(l.built_in),
     created_at: typeof l.created_at === "string" ? l.created_at : now,
     updated_at: typeof l.updated_at === "string" ? l.updated_at : now,
@@ -965,6 +1004,20 @@ function migrateAutoHideDays(value: unknown): number | null {
   return Math.floor(value);
 }
 
+function migrateTimeOfDay(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") return null;
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : null;
+}
+
+function migrateLeadMinutes(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.min(24 * 60, Math.floor(value));
+}
+
 export function loadPreferences(): Preferences {
   const raw = readJson<PreferencesDoc | Preferences>(PREFERENCES_KEY);
   if (raw === null) {
@@ -972,6 +1025,8 @@ export function loadPreferences(): Preferences {
       schema_version: SCHEMA_VERSION,
       sleep_target_minutes: DEFAULT_SLEEP_TARGET_MINUTES,
       auto_hide_completed_days: null,
+      daily_agenda_time: null,
+      event_reminder_lead_minutes: null,
       updated_at: nowIso(),
     };
   }
@@ -985,6 +1040,12 @@ export function loadPreferences(): Preferences {
         : DEFAULT_SLEEP_TARGET_MINUTES,
     auto_hide_completed_days: migrateAutoHideDays(
       (data as Partial<Preferences>).auto_hide_completed_days,
+    ),
+    daily_agenda_time: migrateTimeOfDay(
+      (data as Partial<Preferences>).daily_agenda_time,
+    ),
+    event_reminder_lead_minutes: migrateLeadMinutes(
+      (data as Partial<Preferences>).event_reminder_lead_minutes,
     ),
     updated_at: typeof data.updated_at === "string" ? data.updated_at : nowIso(),
   };
@@ -1095,6 +1156,108 @@ export function saveSleepRecords(records: SleepRecord[]) {
 
 export function writeSleepRecordsLocal(doc: SleepRecordsDoc) {
   writeJson(SLEEP_RECORDS_KEY, doc);
+}
+
+function migrateRecurringReminder(value: unknown): RecurringReminder | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  if (
+    typeof r.id !== "string" ||
+    typeof r.title !== "string" ||
+    typeof r.time !== "string" ||
+    !/^([01]\d|2[0-3]):[0-5]\d$/.test(r.time)
+  ) {
+    return null;
+  }
+  const days = Array.isArray(r.days_of_week)
+    ? Array.from(
+        new Set(
+          r.days_of_week.filter(
+            (d): d is number =>
+              typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 6,
+          ),
+        ),
+      ).sort((a, b) => a - b)
+    : [];
+  const now = nowIso();
+  return {
+    id: r.id,
+    schema_version: SCHEMA_VERSION,
+    title: r.title,
+    notes:
+      typeof r.notes === "string" && r.notes.trim()
+        ? r.notes.trim().slice(0, 500)
+        : null,
+    time: r.time,
+    days_of_week: days.length ? days : [0, 1, 2, 3, 4, 5, 6],
+    enabled: r.enabled !== false,
+    last_completed_date:
+      typeof r.last_completed_date === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(r.last_completed_date)
+        ? r.last_completed_date
+        : null,
+    current_streak:
+      typeof r.current_streak === "number" &&
+      Number.isFinite(r.current_streak) &&
+      r.current_streak >= 0
+        ? Math.floor(r.current_streak)
+        : 0,
+    longest_streak:
+      typeof r.longest_streak === "number" &&
+      Number.isFinite(r.longest_streak) &&
+      r.longest_streak >= 0
+        ? Math.floor(r.longest_streak)
+        : 0,
+    completion_dates: (() => {
+      // Migration path: rows written before this field existed get an
+      // empty history (we can't reconstruct what we never recorded). If
+      // there's a last_completed_date though, seed with it so the most
+      // recent box on the calendar shows lit immediately.
+      if (Array.isArray(r.completion_dates)) {
+        const cleaned = r.completion_dates
+          .filter(
+            (d): d is string =>
+              typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d),
+          )
+          .sort();
+        // Dedup + cap at last 365 — the visualisation only ever shows
+        // 12-26 weeks so older entries are pure cost.
+        const deduped = Array.from(new Set(cleaned));
+        return deduped.slice(-365);
+      }
+      if (
+        typeof r.last_completed_date === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(r.last_completed_date)
+      ) {
+        return [r.last_completed_date];
+      }
+      return [];
+    })(),
+    created_at: typeof r.created_at === "string" ? r.created_at : now,
+    updated_at: typeof r.updated_at === "string" ? r.updated_at : now,
+  };
+}
+
+export function loadRecurringReminders(): RecurringReminder[] {
+  return loadArrayEnvelope({
+    key: RECURRING_REMINDERS_KEY,
+    field: "reminders",
+    migrate: migrateRecurringReminder,
+    defaults: [],
+  });
+}
+
+export function saveRecurringReminders(reminders: RecurringReminder[]) {
+  saveArrayEnvelope<RecurringReminder, RecurringRemindersDoc>({
+    key: RECURRING_REMINDERS_KEY,
+    field: "reminders",
+    items: reminders,
+    cloudWrite: (doc) => cloudWriter?.recurringReminders(doc),
+  });
+}
+
+export function writeRecurringRemindersLocal(doc: RecurringRemindersDoc) {
+  writeJson(RECURRING_REMINDERS_KEY, doc);
 }
 
 // ── One-shot migrations ─────────────────────────────────────────────────
@@ -1221,6 +1384,107 @@ export function backfillEstimateActualsOnce(): void {
 
   if (dirty) saveTodos(updated);
   window.localStorage.setItem(ESTIMATE_ACTUALS_BACKFILLED_KEY, "1");
+}
+
+const SLEEP_RECORDS_DEDUPED_KEY = "lizhi-routine:sleep-records-deduped";
+
+/**
+ * One-shot: collapse historical sleep records that were stored as
+ * separate rows per source / per re-sync. The old ingest keyed on
+ * `source|start`, so a single night tracked by Pillow + Apple Watch and
+ * re-pushed hourly by HAE piled up into 2-6 rows.
+ *
+ * Strategy: greedily group records whose [start, end] windows overlap
+ * (same night), keep the one with the latest `updated_at` as the
+ * winner, drop the rest. Mirrors the latest-arrival-wins rule the
+ * ingest route now enforces, applied retroactively. Gated by a flag so
+ * it runs once per device.
+ */
+export function dedupeSleepRecordsOnce(): void {
+  if (!isBrowser()) return;
+  if (window.localStorage.getItem(SLEEP_RECORDS_DEDUPED_KEY) === "1") return;
+
+  const records = loadSleepRecords();
+  if (records.length < 2) {
+    window.localStorage.setItem(SLEEP_RECORDS_DEDUPED_KEY, "1");
+    return;
+  }
+
+  // Sort by start so overlapping records sit next to each other, then
+  // sweep into clusters where each record overlaps the running window.
+  const sorted = [...records].sort((a, b) =>
+    a.started_at.localeCompare(b.started_at),
+  );
+  const winners: SleepRecord[] = [];
+  let cluster: SleepRecord[] = [];
+  let clusterEnd = -Infinity;
+
+  const flush = () => {
+    if (!cluster.length) return;
+    // Latest-updated wins; ties broken by latest created.
+    const winner = cluster
+      .slice()
+      .sort(
+        (a, b) =>
+          b.updated_at.localeCompare(a.updated_at) ||
+          b.created_at.localeCompare(a.created_at),
+      )[0];
+    winners.push(winner);
+    cluster = [];
+  };
+
+  for (const record of sorted) {
+    const start = Date.parse(record.started_at);
+    const end = Date.parse(record.ended_at);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      // Unparseable — keep as its own row, don't risk losing data.
+      flush();
+      clusterEnd = -Infinity;
+      winners.push(record);
+      continue;
+    }
+    if (cluster.length && start < clusterEnd) {
+      cluster.push(record);
+      clusterEnd = Math.max(clusterEnd, end);
+    } else {
+      flush();
+      cluster = [record];
+      clusterEnd = end;
+    }
+  }
+  flush();
+
+  if (winners.length !== records.length) {
+    // Re-sort newest-first to match ingest output ordering.
+    winners.sort((a, b) =>
+      a.started_at < b.started_at ? 1 : a.started_at > b.started_at ? -1 : 0,
+    );
+    saveSleepRecords(winners);
+  }
+  window.localStorage.setItem(SLEEP_RECORDS_DEDUPED_KEY, "1");
+}
+
+const LEGACY_CALENDAR_CLEARED_KEY = "lizhi-routine:legacy-calendar-cleared";
+
+/**
+ * One-shot: remove ICS-imported calendar blocks that predate the
+ * `import_batch` stamp (so they can't be grouped or bulk-managed). The
+ * user re-imports their .ics files afterward; the fresh import tags
+ * every block with a batch. Gated by a flag so it runs once per device.
+ * Only touches `kind: "calendar"` tasks with no `import_batch` — placed
+ * tasks, routines, and sleep are left alone.
+ */
+export function clearLegacyCalendarImportsOnce(): void {
+  if (!isBrowser()) return;
+  if (window.localStorage.getItem(LEGACY_CALENDAR_CLEARED_KEY) === "1") return;
+
+  for (const { dateKey, tasks } of loadAllDays()) {
+    const next = tasks.filter(
+      (task) => !(task.kind === "calendar" && !task.import_batch),
+    );
+    if (next.length !== tasks.length) saveDay(dateKey, next);
+  }
+  window.localStorage.setItem(LEGACY_CALENDAR_CLEARED_KEY, "1");
 }
 
 export function savePreferences(prefs: Preferences) {

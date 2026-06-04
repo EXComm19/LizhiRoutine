@@ -1,4 +1,4 @@
-import type { Category } from "@/lib/schema";
+import type { Category, LifeArea } from "@/lib/schema";
 
 export type TodoParserListContext = {
   id: string;
@@ -29,6 +29,13 @@ export type ParsedTodoCandidate = {
    * so the user can tell the height is inferred. Only meaningful for events.
    */
   durationUncertain: boolean;
+  /**
+   * Life area the model classified this item into (academic / work /
+   * fitness / sleep / medical / social / hobby / chores / personal /
+   * general). Forced-guess: never null. Optional in the type for
+   * backward compat with older parser responses.
+   */
+  lifeArea?: LifeArea;
 };
 
 export type ParseTodosRequest = {

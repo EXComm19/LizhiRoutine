@@ -68,8 +68,40 @@ function setDisabled(button: HTMLButtonElement, value: boolean): void {
   button.disabled = value;
 }
 
+/**
+ * Clean a captured page <title> into the title that will actually be
+ * saved. Mirrors cleanCapturedTitle in
+ * app/api/extension/create-todo/route.ts — the server does the
+ * authoritative cleanup (since onCreateNew posts the raw pageTitle),
+ * but we run the same transform here so the preview shows the user the
+ * real result instead of the raw breadcrumb-laden tab title.
+ *
+ *   "BPS3072 2026: Assessment 2. Background and Plan | MonashELMS1"
+ *     → "BPS3072 Assessment 2. Background and Plan"
+ */
+function cleanCapturedTitle(raw: string): string {
+  let title = (raw || "").replace(/[\r\n\t]/g, " ").trim();
+  if (!title) return title;
+  const pipeIdx = title.lastIndexOf(" | ");
+  if (pipeIdx > 0) {
+    title = title.slice(0, pipeIdx).trim();
+  } else {
+    const sep = title.match(/^(.*\S)\s+[–—\-·]\s+([^|]+)$/);
+    if (sep) {
+      const tail = sep[2].trim();
+      if (!tail.includes(".") && tail.split(/\s+/).length <= 4) {
+        title = sep[1].trim();
+      }
+    }
+  }
+  title = title.replace(/\b20\d{2}\b/g, " ");
+  title = title.replace(/\s*:\s*/g, " ");
+  title = title.replace(/\s{2,}/g, " ").trim();
+  return title || (raw || "").trim();
+}
+
 function renderPreview(page: CapturedPage): void {
-  titleEl.textContent = page.title || "(no title)";
+  titleEl.textContent = cleanCapturedTitle(page.title) || "(no title)";
   const host = (() => {
     try {
       return new URL(page.url).hostname.replace(/^www\./, "");

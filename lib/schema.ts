@@ -58,6 +58,21 @@ export type Task = {
   source_id: string | null;
   commute_config: CommuteConfig | null;
   commute_estimate: CommuteEstimate | null;
+  /**
+   * Life area override for this specific block. Normally a block's area
+   * is derived from its source (todo's list, routine template, event),
+   * but ICS-imported calendar blocks have no backing entity — this lets
+   * the user assign one directly. Optional / usually unset.
+   */
+  life_area?: LifeArea;
+  /**
+   * For ICS-imported calendar blocks: which import this came from, so
+   * the manage UI can group + bulk-edit by batch. `id` is a per-import
+   * timestamp token; `label` is the filename / URL the user imported.
+   * Unset on everything except calendar imports (and on legacy imports
+   * that predate this field — those group under "Earlier import").
+   */
+  import_batch?: { id: string; label: string; importedAt: string };
   created_at: string;
   updated_at: string;
 };
@@ -71,6 +86,13 @@ export type RoutineTemplate = {
   icon: RoutineIconName;
   kind: "routine" | "sleep";
   default_duration_minutes: number;
+  /**
+   * Life area this routine counts toward in time stats. Sleep templates
+   * are always "sleep"; others default via keyword heuristic + are
+   * user-editable. Optional during migration — readers fall back to a
+   * heuristic when absent.
+   */
+  life_area?: LifeArea;
   commute_enabled: boolean;
   commute_config: CommuteConfig | null;
   built_in: boolean;
@@ -83,6 +105,12 @@ export type TodoList = {
   schema_version: number;
   name: string;
   color: TodoListColor;
+  /**
+   * Life area every todo in this list inherits. A list IS a life-area
+   * grouping (e.g. "BPS3061" → academic), so todos don't carry their
+   * own — they read it off the list. Optional during migration.
+   */
+  life_area?: LifeArea;
   built_in: boolean;
   created_at: string;
   updated_at: string;
@@ -224,18 +252,37 @@ export type TodoItem = {
 export type EventStatus = "scheduled" | "cancelled";
 
 /**
- * Coarse category for visual + classification purposes. Drives the icon
- * shown on the event card and the timeline block, so a quick glance
- * tells "medical thing" vs "work meeting" vs "class". "general" is the
- * fallback when nothing more specific fits.
+ * Life Area — the cross-cutting "which part of life does this belong to"
+ * axis. Orthogonal to Category (priority) and kind (timeline shape).
+ * Every schedulable thing (todo via its list, routine, event, period)
+ * carries one, so Stats can sum time spent per area.
+ *
+ * "general" is the forced-fallback bucket for anything that doesn't fit
+ * a more specific area (we always assign the closest match, never leave
+ * it null).
+ *
+ * Superset of the original EventType — the first six values are
+ * unchanged so existing events keep working; fitness/sleep/hobby/chores
+ * are the new additions.
  */
-export type EventType =
+export type LifeArea =
   | "general"
   | "medical"
   | "work"
   | "academic"
   | "social"
-  | "personal";
+  | "personal"
+  | "fitness"
+  | "sleep"
+  | "hobby"
+  | "chores";
+
+/**
+ * @deprecated Use LifeArea. Kept as an alias so existing EventItem code
+ * (event_type field) and the EVENT_TYPE_* lookups compile unchanged
+ * during the migration. New code should reference LifeArea directly.
+ */
+export type EventType = LifeArea;
 
 export type EventItem = {
   id: string;
@@ -276,6 +323,59 @@ export type Preferences = {
    * A value of 0 means "hide immediately on completion."
    */
   auto_hide_completed_days: number | null;
+  /**
+   * Local "HH:MM" 24h time the daily-agenda push fires. `null` = the
+   * daily agenda push is disabled. Server uses its local clock (which
+   * is assumed to match the user's TZ in dev).
+   */
+  daily_agenda_time: string | null;
+  /**
+   * Minutes before an event's start_time we send a push reminder. 0 or
+   * null = event reminders are disabled. Applies globally to every
+   * event the user has saved.
+   */
+  event_reminder_lead_minutes: number | null;
+  updated_at: string;
+};
+
+/**
+ * Lightweight repeated reminder — fires push notifications on a
+ * weekday-pattern schedule (e.g. "every night 22:00 take medicine",
+ * "weekdays 07:00 standup prep"). Does NOT appear on the timeline —
+ * it's just a recurring ping with optional streak tracking.
+ *
+ * When the user taps the notification, the app opens with
+ * `?check_reminder=<id>` and we increment `current_streak` if
+ * yesterday was the last_completed_date (or this is the first time).
+ */
+export type RecurringReminder = {
+  id: string;
+  schema_version: number;
+  title: string;
+  notes: string | null;
+  /** Local "HH:MM" 24h time the reminder fires. */
+  time: string;
+  /**
+   * JS Date.getDay() weekday indices to fire on. 0 = Sunday, 6 =
+   * Saturday. Empty array is treated the same as all 7 (defensive).
+   */
+  days_of_week: number[];
+  /** Paused without deleting. */
+  enabled: boolean;
+  /** "YYYY-MM-DD" of the most recent check-off; null = never. */
+  last_completed_date: string | null;
+  /** Consecutive days completed up to and including last_completed_date. */
+  current_streak: number;
+  /** All-time best streak. */
+  longest_streak: number;
+  /**
+   * Per-day completion history as YYYY-MM-DD strings. Powers the
+   * lit-calendar visualization in the Stats tab. Sorted oldest-first
+   * (we append on check-off). Capped at the last 365 entries on write
+   * to keep the JSONB blob bounded.
+   */
+  completion_dates: string[];
+  created_at: string;
   updated_at: string;
 };
 
@@ -309,6 +409,8 @@ export type Period = {
   days_of_week: number[];
   breaks: PeriodBreak[];
   notes: string;
+  /** Life area this period counts toward in time stats. Optional during migration. */
+  life_area?: LifeArea;
   created_at: string;
   updated_at: string;
 };
@@ -371,3 +473,4 @@ export type SleepRecord = {
 };
 
 export type SleepRecordsDoc = Envelope<{ records: SleepRecord[] }>;
+export type RecurringRemindersDoc = Envelope<{ reminders: RecurringReminder[] }>;

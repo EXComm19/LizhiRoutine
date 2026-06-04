@@ -54,6 +54,56 @@ function safeHostname(url: string | undefined): string | null {
   }
 }
 
+/**
+ * Clean a captured page <title> into a usable todo title.
+ *
+ * Page titles from LMS / SaaS apps carry breadcrumb cruft that's noise
+ * for a todo. Examples:
+ *   "BPS3072 2026: Assessment 2. Background and Plan | MonashELMS1"
+ *     → "BPS3072 Assessment 2. Background and Plan"
+ *   "Inbox (3) - Gmail"  → "Inbox (3)"
+ *
+ * Transforms, in order:
+ *   1. Strip everything from the last " | " / " · " / " — " / " - "
+ *      separator onward WHEN the trailing segment looks like a site
+ *      name (≤4 words, no sentence punctuation). Pipe is always a
+ *      separator; dash/middot only when the tail is short.
+ *   2. Drop a standalone 4-digit year token (2020-2099).
+ *   3. Collapse a "CODE: rest" colon that's left dangling after the
+ *      year is removed → "CODE rest".
+ *   4. Squeeze repeated whitespace.
+ */
+function cleanCapturedTitle(raw: string): string {
+  let title = raw.replace(/[\r\n\t]/g, " ").trim();
+  if (!title) return title;
+
+  // 1. Strip a trailing site-name segment.
+  //    Pipe: always a separator. Dash/middot/em-dash: only if the tail
+  //    is a short site-y token (no period, ≤4 words).
+  const pipeIdx = title.lastIndexOf(" | ");
+  if (pipeIdx > 0) {
+    title = title.slice(0, pipeIdx).trim();
+  } else {
+    const sepMatch = title.match(/^(.*\S)\s+[–—\-·]\s+([^|]+)$/);
+    if (sepMatch) {
+      const tail = sepMatch[2].trim();
+      const looksLikeSite =
+        !tail.includes(".") && tail.split(/\s+/).length <= 4;
+      if (looksLikeSite) title = sepMatch[1].trim();
+    }
+  }
+
+  // 2. Drop standalone year tokens.
+  title = title.replace(/\b20\d{2}\b/g, " ");
+
+  // 3. "CODE: rest" leftover (e.g. "BPS3072 : Assessment" → "BPS3072 Assessment").
+  title = title.replace(/\s*:\s*/g, " ");
+
+  // 4. Squeeze whitespace.
+  title = title.replace(/\s{2,}/g, " ").trim();
+  return title || raw.trim();
+}
+
 function clampCategory(value: unknown): Category {
   return value === "T0" || value === "T1" || value === "T2" ? value : "T1";
 }
@@ -88,10 +138,15 @@ export async function POST(request: NextRequest) {
   const sourceTitle =
     typeof body.source?.title === "string" ? body.source.title.trim() : "";
 
-  // Title precedence: explicit body.title > source.title > generic fallback.
+  // Title precedence: explicit body.title > source.title > generic
+  // fallback. An explicit body.title is the user's own typing — trust
+  // it verbatim. A source.title is the page <title>, which carries
+  // breadcrumb noise we clean up.
+  const explicitTitle =
+    typeof body.title === "string" ? body.title.trim() : "";
   let title =
-    (typeof body.title === "string" ? body.title.trim() : "") ||
-    sourceTitle ||
+    explicitTitle ||
+    (sourceTitle ? cleanCapturedTitle(sourceTitle) : "") ||
     "Captured page";
   title = title.replace(/[\r\n\t]/g, " ").slice(0, MAX_TITLE_CHARS);
 

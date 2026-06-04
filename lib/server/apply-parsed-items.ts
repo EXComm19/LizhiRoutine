@@ -126,6 +126,7 @@ export async function applyParsedItemsToUser(params: {
           starts_at: toIsoStart(candidate.dueDate, candidate.dueTime),
           duration_minutes: candidate.durationMinutes,
           duration_uncertain: candidate.durationUncertain ?? false,
+          event_type: candidate.lifeArea,
           tags: candidate.tags,
         }),
       );

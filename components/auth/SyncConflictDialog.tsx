@@ -45,6 +45,7 @@ export function SyncConflictDialog({
     cloud.periods > 0 ||
     cloud.events > 0 ||
     cloud.sleepRecords > 0 ||
+    cloud.recurringReminders > 0 ||
     cloud.days > 0;
 
   return (
