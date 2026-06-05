@@ -31,6 +31,14 @@ function previousDateKey(dateKey: string): string {
   return localDateKey(date);
 }
 
+// DST-safe single-day step (setDate handles 23h/25h days correctly).
+function nextDateKey(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const date = new Date(y, (m ?? 1) - 1, d ?? 1);
+  date.setDate(date.getDate() + 1);
+  return localDateKey(date);
+}
+
 /**
  * Mark a reminder complete "now". Returns the patched reminder.
  *
@@ -68,6 +76,83 @@ export function checkOffRecurringReminder(
     completion_dates: history,
     updated_at: now.toISOString(),
   };
+}
+
+/**
+ * Recompute current_streak + longest_streak from the FULL completion
+ * history. The incremental checkOff math can't handle out-of-order edits
+ * (manual backfill / un-checking a day), so any manual toggle routes
+ * through here instead.
+ *
+ * Semantics match checkOff/decay: a streak is a run of consecutive
+ * CALENDAR days (a missing day breaks it, regardless of schedule). The
+ * current streak is the run ending at the most recent completion, but
+ * only "alive" if that completion is today or yesterday — otherwise it
+ * has already decayed to 0. longest_streak never decreases.
+ */
+export function recomputeStreaks(
+  reminder: RecurringReminder,
+  now: Date = new Date(),
+): RecurringReminder {
+  const dates = Array.from(new Set(reminder.completion_dates ?? [])).sort();
+  if (!dates.length) {
+    return {
+      ...reminder,
+      current_streak: 0,
+      last_completed_date: null,
+      updated_at: now.toISOString(),
+    };
+  }
+
+  // Longest consecutive-calendar-day run anywhere in history.
+  let longest = 1;
+  let run = 1;
+  for (let i = 1; i < dates.length; i += 1) {
+    run = dates[i] === nextDateKey(dates[i - 1]) ? run + 1 : 1;
+    if (run > longest) longest = run;
+  }
+
+  // Current run = consecutive days ending at the latest completion.
+  let current = 1;
+  for (let i = dates.length - 1; i > 0; i -= 1) {
+    if (dates[i] === nextDateKey(dates[i - 1])) current += 1;
+    else break;
+  }
+
+  const last = dates[dates.length - 1];
+  const today = localDateKey(now);
+  const yesterday = previousDateKey(today);
+  const alive = last === today || last === yesterday;
+
+  return {
+    ...reminder,
+    last_completed_date: last,
+    current_streak: alive ? current : 0,
+    longest_streak: Math.max(reminder.longest_streak ?? 0, longest),
+    updated_at: now.toISOString(),
+  };
+}
+
+/**
+ * Toggle a single day's completion (manual check-off / backfill from the
+ * lit-calendar). Adds the day if absent, removes it if present, then
+ * re-derives the streak counters from the updated history.
+ */
+export function toggleReminderCompletion(
+  reminder: RecurringReminder,
+  dateKey: string,
+  now: Date = new Date(),
+): RecurringReminder {
+  const set = new Set(reminder.completion_dates ?? []);
+  if (set.has(dateKey)) set.delete(dateKey);
+  else set.add(dateKey);
+  return recomputeStreaks(
+    {
+      ...reminder,
+      completion_dates: Array.from(set).sort().slice(-365),
+    },
+    now,
+  );
 }
 
 /**

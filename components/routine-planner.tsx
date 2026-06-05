@@ -15,6 +15,7 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import {
+  Archive,
   BookOpen,
   Briefcase,
   CalendarDays,
@@ -119,7 +120,9 @@ import {
   saveTemplates,
   saveTodoLists,
   saveTodos,
+  saveRecurringReminders,
 } from "@/lib/storage";
+import { toggleReminderCompletion } from "@/lib/recurring-reminder-streak";
 import {
   periodActiveOnDate,
   periodHoverDetails,
@@ -940,6 +943,24 @@ export function RoutinePlanner() {
     }
   }, [auth, refreshPlannerState]);
 
+  // Manual check-off / backfill from the Stats lit-calendar. Toggles one
+  // day's completion for a reminder and re-derives the streak from the
+  // full history (via toggleReminderCompletion), so a missed or
+  // undelivered push notification no longer permanently breaks a streak —
+  // the user just taps the day. Persists locally + fires the cloud writer.
+  const handleToggleReminderDay = useCallback(
+    (reminderId: string, dateKey: string) => {
+      const next = recurringReminders.map((reminder) =>
+        reminder.id === reminderId
+          ? toggleReminderCompletion(reminder, dateKey)
+          : reminder,
+      );
+      setRecurringReminders(next);
+      saveRecurringReminders(next);
+    },
+    [recurringReminders],
+  );
+
   // Pull from cloud when the tab regains focus or becomes visible. Cheap
   // way to catch up without standing up a realtime subscription — common
   // case is the user alt-tabs back after editing on another device.
@@ -1323,6 +1344,81 @@ export function RoutinePlanner() {
       }
     },
     [persistTodos, updateTasksForDay],
+  );
+
+  // Convert a deadline-less, repeatedly-scheduled todo into a routine.
+  // Preserves life-area (from the todo's list) and timing history: every
+  // timeline block placed from the todo is re-pointed to the new routine
+  // (kind task → routine), so accumulated time stays and now counts as
+  // routine time. The todo itself is removed (it's a routine now).
+  const convertReminderToRoutine = useCallback(
+    (todoId: string) => {
+      const todo = todos.find((item) => item.id === todoId);
+      if (!todo) return;
+      const list = todoListById.get(todo.list_id);
+
+      // Default session length = the duration the user most often
+      // schedules it at; fall back to the estimate, then 60m.
+      const placed = loadAllDays().flatMap((day) =>
+        day.tasks.filter(
+          (task) => task.source_id === todoId && task.kind === "task",
+        ),
+      );
+      let defaultDuration = todo.estimate?.minutes ?? 60;
+      if (placed.length) {
+        const counts = new Map<number, number>();
+        for (const block of placed) {
+          counts.set(
+            block.duration_minutes,
+            (counts.get(block.duration_minutes) ?? 0) + 1,
+          );
+        }
+        defaultDuration = [...counts.entries()].sort(
+          (a, b) => b[1] - a[1],
+        )[0][0];
+      }
+
+      const template = createTemplate({
+        title: todo.title,
+        category: todo.category,
+        color: list?.color ?? "blue",
+        icon: "zap",
+        default_duration_minutes: Math.max(5, Math.round(defaultDuration)),
+        commute_enabled: false,
+        commute_config: null,
+        life_area: list?.life_area ?? guessLifeArea(todo.title),
+        kind: "routine",
+      });
+      // Append directly (always a fresh id) rather than via upsertTemplate,
+      // which is declared later in this component.
+      setTemplates((current) => {
+        const next = [...current, template];
+        saveTemplates(next);
+        return next;
+      });
+
+      // Re-point historical timeline blocks from the todo to the routine.
+      for (const day of loadAllDays()) {
+        if (
+          !day.tasks.some(
+            (task) => task.source_id === todoId && task.kind === "task",
+          )
+        ) {
+          continue;
+        }
+        updateTasksForDay(day.dateKey, (tasks) =>
+          tasks.map((task) =>
+            task.source_id === todoId && task.kind === "task"
+              ? patchTask(task, { kind: "routine", source_id: template.id })
+              : task,
+          ),
+        );
+      }
+
+      // Drop the now-migrated todo.
+      persistTodos((items) => items.filter((item) => item.id !== todoId));
+    },
+    [todos, todoListById, updateTasksForDay, persistTodos],
   );
 
   const upsertTodoList = useCallback(
@@ -1796,6 +1892,7 @@ export function RoutinePlanner() {
               addInboxTask={addInboxTask}
               updateReminder={updateReminder}
               deleteReminder={deleteReminder}
+              convertReminderToRoutine={convertReminderToRoutine}
               upsertTodoList={upsertTodoList}
               deleteTodoList={deleteTodoList}
               periods={periods}
@@ -1897,6 +1994,7 @@ export function RoutinePlanner() {
                 sleepRecords={sleepRecords}
                 sleepTargetMinutes={sleepTargetMinutes}
                 recurringReminders={recurringReminders}
+                onToggleReminderDay={handleToggleReminderDay}
                 dataRevision={dataRevision}
               />
             )}
@@ -2503,6 +2601,7 @@ function StatsView({
   sleepRecords,
   sleepTargetMinutes,
   recurringReminders,
+  onToggleReminderDay,
   dataRevision,
 }: {
   selectedDate: string;
@@ -2513,6 +2612,7 @@ function StatsView({
   sleepRecords: SleepRecord[];
   sleepTargetMinutes: number;
   recurringReminders: RecurringReminder[];
+  onToggleReminderDay: (reminderId: string, dateKey: string) => void;
   dataRevision: number;
 }) {
   const initialStart = startOfWeek(selectedDate);
@@ -2812,7 +2912,10 @@ function StatsView({
             grey = not a scheduled day.
           </div>
         </div>
-        <RecurringRemindersStatsSection reminders={recurringReminders} />
+        <RecurringRemindersStatsSection
+          reminders={recurringReminders}
+          onToggleDay={onToggleReminderDay}
+        />
       </div>
     </section>
   );
@@ -3692,6 +3795,7 @@ type LeftRailProps = {
   ) => void;
   updateReminder: (taskId: string, values: Partial<TodoItem>) => void;
   deleteReminder: (taskId: string) => void;
+  convertReminderToRoutine: (taskId: string) => void;
   upsertTodoList: (list: TodoList) => void;
   deleteTodoList: (listId: string) => void;
   periods: Period[];
@@ -3711,6 +3815,7 @@ function LeftRail({
   addInboxTask,
   updateReminder,
   deleteReminder,
+  convertReminderToRoutine,
   upsertTodoList,
   deleteTodoList,
   events,
@@ -4024,6 +4129,7 @@ function LeftRail({
         onToggleListCollapse={toggleTodoListCollapse}
         updateReminder={updateReminder}
         deleteReminder={deleteReminder}
+        convertReminderToRoutine={convertReminderToRoutine}
       />
       {!tasks.length && <EmptyState text={emptyText} />}
     </div>
@@ -4443,6 +4549,8 @@ type ReminderEditorProps = {
   onCancel: () => void;
   onSubmit: () => void;
   onDelete?: () => void;
+  /** Convert this todo into a routine template (only on edit, not add). */
+  onConvertToRoutine?: () => void;
 };
 
 function ReminderEditor({
@@ -4463,6 +4571,7 @@ function ReminderEditor({
   onCancel,
   onSubmit,
   onDelete,
+  onConvertToRoutine,
 }: ReminderEditorProps) {
   const [newTag, setNewTag] = useState("");
   const selectedList = todoLists.find((list) => list.id === listId);
@@ -4586,6 +4695,24 @@ function ReminderEditor({
         </div>
       </div>
 
+        {onConvertToRoutine && (
+          <div className="border-t border-[color:var(--line-soft)] px-6 py-3">
+            <button
+              type="button"
+              onClick={onConvertToRoutine}
+              className="inline-flex items-center gap-1.5 rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2.5 py-1.5 text-[12px] font-medium !text-[color:var(--ink-2)] transition-colors hover:border-[color:var(--line-strong)] hover:bg-[color:var(--hover)] hover:!text-[color:var(--ink)]"
+              title="Turn this into a repeatable routine (keeps life area + logged time)"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              Convert to routine
+            </button>
+            <p className="mt-1.5 text-[11px] text-[color:var(--ink-3)]">
+              For things you keep doing with no deadline. Keeps the life area
+              and all scheduled time; moves it to the Routines rail.
+            </p>
+          </div>
+        )}
+
         <EditorFooter
           onDelete={onDelete}
           onCancel={onCancel}
@@ -4603,6 +4730,7 @@ type ReminderCardProps = {
   todoLists: TodoList[];
   updateReminder: (taskId: string, values: Partial<TodoItem>) => void;
   deleteReminder: (taskId: string) => void;
+  convertReminderToRoutine: (taskId: string) => void;
 };
 
 function TodoListGroups({
@@ -4613,6 +4741,7 @@ function TodoListGroups({
   onToggleListCollapse,
   updateReminder,
   deleteReminder,
+  convertReminderToRoutine,
 }: {
   tasks: TodoWithMeta[];
   todoLists: TodoList[];
@@ -4621,6 +4750,7 @@ function TodoListGroups({
   onToggleListCollapse: (listId: string) => void;
   updateReminder: (taskId: string, values: Partial<TodoItem>) => void;
   deleteReminder: (taskId: string) => void;
+  convertReminderToRoutine: (taskId: string) => void;
 }) {
   // When sorting by due date, flatten all groups into a single chronological
   // list — otherwise the list-grouping dominates and the sort isn't visible.
@@ -4636,6 +4766,7 @@ function TodoListGroups({
             todoLists={todoLists}
             updateReminder={updateReminder}
             deleteReminder={deleteReminder}
+            convertReminderToRoutine={convertReminderToRoutine}
           />
         ))}
       </div>
@@ -4686,6 +4817,7 @@ function TodoListGroups({
                       todoLists={todoLists}
                       updateReminder={updateReminder}
                       deleteReminder={deleteReminder}
+                      convertReminderToRoutine={convertReminderToRoutine}
                     />
                   ))}
                 </div>
@@ -4702,6 +4834,7 @@ function ReminderCard({
   todoLists,
   updateReminder,
   deleteReminder,
+  convertReminderToRoutine,
 }: ReminderCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isContextOpen, setIsContextOpen] = useState(false);
@@ -4770,6 +4903,16 @@ function ReminderCard({
         onDelete={() => {
           deleteReminder(task.id);
           setIsEditing(false);
+        }}
+        onConvertToRoutine={() => {
+          if (
+            window.confirm(
+              `Convert "${task.title}" into a routine? Its life area and all scheduled time are kept; it moves to the Routines rail and leaves your reminders.`,
+            )
+          ) {
+            convertReminderToRoutine(task.id);
+            setIsEditing(false);
+          }
         }}
       />
     );
@@ -5047,7 +5190,10 @@ function RightRail({
   deleteTemplate,
 }: RightRailProps) {
   const [isAdding, setIsAdding] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const routineTemplates = templates.filter((template) => template.kind !== "sleep");
+  const activeRoutines = routineTemplates.filter((template) => !template.archived);
+  const archivedRoutines = routineTemplates.filter((template) => template.archived);
 
   return (
     <aside className="flex h-full w-full min-h-0 flex-col bg-[color:var(--card)]">
@@ -5112,8 +5258,8 @@ function RightRail({
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-0 pb-4 [scrollbar-color:var(--line)_transparent]">
-        {routineTemplates.length ? (
-          routineTemplates.map((template) => (
+        {activeRoutines.length ? (
+          activeRoutines.map((template) => (
             <RoutineTemplateCard
               key={template.id}
               template={template}
@@ -5123,7 +5269,42 @@ function RightRail({
           ))
         ) : (
           <div className="mx-3.5">
-            <EmptyState text="No routines yet." />
+            <EmptyState
+              text={
+                archivedRoutines.length
+                  ? "No active routines — all archived."
+                  : "No routines yet."
+              }
+            />
+          </div>
+        )}
+
+        {archivedRoutines.length > 0 && (
+          <div className="mt-2 border-t border-[color:var(--line-soft)] pt-2">
+            <button
+              type="button"
+              onClick={() => setShowArchived((value) => !value)}
+              className="flex w-full items-center gap-1.5 px-[18px] py-1.5 font-[family-name:var(--font-mono)] text-[10.5px] font-medium uppercase tracking-[0.14em] text-[color:var(--ink-3)] transition-colors hover:text-[color:var(--ink-2)]"
+              aria-expanded={showArchived}
+            >
+              <ChevronDown
+                className={cn(
+                  "h-3 w-3 shrink-0 transition-transform",
+                  !showArchived && "-rotate-90",
+                )}
+              />
+              <Archive className="h-3 w-3 shrink-0" />
+              Archived ({archivedRoutines.length})
+            </button>
+            {showArchived &&
+              archivedRoutines.map((template) => (
+                <RoutineTemplateCard
+                  key={template.id}
+                  template={template}
+                  upsertTemplate={upsertTemplate}
+                  deleteTemplate={deleteTemplate}
+                />
+              ))}
           </div>
         )}
       </div>
@@ -5171,12 +5352,15 @@ function RoutineTemplateEditor({
   onCancel,
   onSubmit,
   onDelete,
+  onArchiveToggle,
 }: {
   template?: RoutineTemplate;
   submitLabel: string;
   onCancel: () => void;
   onSubmit: (template: RoutineDraft) => void;
   onDelete?: () => void;
+  /** Toggle archived state. Only passed when editing an existing routine. */
+  onArchiveToggle?: () => void;
 }) {
   const [title, setTitle] = useState(template?.title ?? "");
   const [duration, setDuration] = useState(
@@ -5428,6 +5612,21 @@ function RoutineTemplateEditor({
           ) : (
             <div />
           )}
+          {onArchiveToggle && (
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-3 text-[13px] font-semibold !text-[color:var(--ink-2)] transition-colors hover:bg-[color:var(--sunken)] hover:!text-[color:var(--ink)]"
+              onClick={onArchiveToggle}
+              title={
+                template?.archived
+                  ? "Restore this routine to the rail"
+                  : "Hide this routine without deleting its history"
+              }
+            >
+              <Archive className="h-3.5 w-3.5" />
+              {template?.archived ? "Unarchive" : "Archive"}
+            </button>
+          )}
           <div className="flex flex-1 justify-end gap-2">
             <button
               type="button"
@@ -5496,10 +5695,14 @@ function RoutineTemplateCard({
   const [isEditing, setIsEditing] = useState(false);
   const styles = routineColorTokens(template.color);
   const commuteRoutine = isCommuteTemplate(template);
+  const archived = Boolean(template.archived);
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `template:${template.id}`,
       data: { type: "template", templateId: template.id } satisfies DragPayload,
+      // Archived routines are hidden from scheduling — can't drag onto the
+      // timeline; they only exist here so you can review or unarchive them.
+      disabled: archived,
     });
   const transformStyle = transform
     ? {
@@ -5532,6 +5735,10 @@ function RoutineTemplateCard({
           deleteTemplate(template.id);
           setIsEditing(false);
         }}
+        onArchiveToggle={() => {
+          upsertTemplate(patchTemplate(template, { archived: !archived }));
+          setIsEditing(false);
+        }}
       />
     );
   }
@@ -5541,12 +5748,15 @@ function RoutineTemplateCard({
       ref={setNodeRef}
       style={transformStyle}
       className={cn(
-        "group mx-3 mb-1.5 flex cursor-grab select-none touch-none items-center gap-[11px] rounded-[11px] border border-transparent p-2.5 transition-all duration-150 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)] active:cursor-grabbing",
+        "group mx-3 mb-1.5 flex select-none items-center gap-[11px] rounded-[11px] border border-transparent p-2.5 transition-all duration-150 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)]",
+        archived
+          ? "cursor-default opacity-55 hover:opacity-80"
+          : "cursor-grab touch-none active:cursor-grabbing",
         isDragging &&
           "z-50 border-[color:var(--line)] bg-[color:var(--hover)] opacity-95 shadow-[0_10px_24px_-14px_rgba(20,18,10,0.35)]",
       )}
-      {...listeners}
-      {...attributes}
+      {...(archived ? {} : listeners)}
+      {...(archived ? {} : attributes)}
       title={[
         template.title,
         `${template.category} - ${formatDuration(template.default_duration_minutes)}`,

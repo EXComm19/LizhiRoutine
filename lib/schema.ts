@@ -96,6 +96,14 @@ export type RoutineTemplate = {
   commute_enabled: boolean;
   commute_config: CommuteConfig | null;
   built_in: boolean;
+  /**
+   * Archived routines are hidden from the right-rail list (so you can't
+   * place new blocks from them) but never deleted — their historical
+   * timeline blocks and accumulated time stay intact, and you can
+   * unarchive any time. Undefined / false = active. Sleep templates are
+   * never archivable.
+   */
+  archived?: boolean;
   created_at: string;
   updated_at: string;
 };

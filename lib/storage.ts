@@ -482,6 +482,9 @@ function migrateTemplate(template: unknown): RoutineTemplate | null {
       Boolean(t.commute_enabled) || Boolean(migrateCommuteConfig(t.commute_config)),
     commute_config: migrateCommuteConfig(t.commute_config),
     built_in: Boolean(t.built_in) || kind === "sleep",
+    // Sleep templates are never archivable; everything else preserves
+    // the flag (absent = active).
+    ...(kind !== "sleep" && t.archived === true ? { archived: true } : {}),
     created_at: typeof t.created_at === "string" ? t.created_at : now,
     updated_at: typeof t.updated_at === "string" ? t.updated_at : now,
   };
