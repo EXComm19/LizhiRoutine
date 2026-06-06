@@ -27,7 +27,9 @@ export async function POST(request: NextRequest) {
       title: "Lizhi",
       body: "Test push received. Tap to open the planner.",
       url: "/",
-      tag: "lizhi-test",
+      // Unique per send so a previous (undismissed) test notification
+      // can never silently suppress this one — every test re-alerts.
+      tag: `lizhi-test:${Date.now()}`,
     },
   });
   return NextResponse.json(result);

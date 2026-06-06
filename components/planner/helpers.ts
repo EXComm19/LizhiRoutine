@@ -1320,6 +1320,11 @@ export function todoDueSortKey(todo: TodoItem) {
 export function compareTodosByDueDate(a: TodoWithMeta, b: TodoWithMeta) {
   const dueSort = todoDueSortKey(a).localeCompare(todoDueSortKey(b));
   if (dueSort !== 0) return dueSort;
+  // Same due date (or both undated) → break the tie by tier. Category is
+  // "T0" < "T1" < "T2", so a plain compare ranks T0 (highest priority)
+  // first. This is what makes undated todos fall back to tier order.
+  const tierSort = a.category.localeCompare(b.category);
+  if (tierSort !== 0) return tierSort;
   const createdSort = a.created_at.localeCompare(b.created_at);
   if (createdSort !== 0) return createdSort;
   return a.title.localeCompare(b.title);

@@ -44,6 +44,13 @@ self.addEventListener("push", (event) => {
     self.registration.showNotification(title, {
       body,
       tag,
+      // CRITICAL for iOS: when a `tag` is reused, a new notification
+      // silently UPDATES the existing one and does NOT re-alert (no
+      // banner/sound) unless `renotify` is true. Without this, the second
+      // "Send test push" (same tag) appears to "not arrive", and repeated
+      // reminders that reuse a daily tag don't buzz. `renotify` requires a
+      // tag, so only set it when we have one.
+      renotify: Boolean(tag),
       badge: "/icon.svg",
       icon: "/icon.svg",
       data: { url },

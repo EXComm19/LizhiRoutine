@@ -1883,6 +1883,18 @@ export function RoutinePlanner() {
     <DndContext
       sensors={sensors}
       collisionDetection={timelineCollisionDetection}
+      autoScroll={{
+        // dnd-kit auto-scrolls ANY scrollable ancestor near the pointer.
+        // That made the left/right side rails (the todo + routine lists,
+        // both <aside>) jump around vertically while dragging a card out
+        // of them — disorienting. Restrict auto-scroll to non-rail
+        // containers so only the timeline (and window) scroll to reach
+        // off-screen time slots; the rails stay put.
+        canScroll: (element) =>
+          element instanceof Element
+            ? element.closest("aside") === null
+            : true,
+      }}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
@@ -4222,7 +4234,7 @@ function LeftRail({
           {/* Upper region: scrollable today's-input list. flex-1 + min-h-0
               lets it shrink so the pinned events region below stays visible
               even when the user has many todos. */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 [scrollbar-color:var(--line)_transparent]">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3.5 pb-2 [scrollbar-color:var(--line)_transparent]">
             {renderReminderList(
               calendarInboxTasks,
               "All open todos are complete.",
@@ -4285,7 +4297,7 @@ function LeftRail({
           >
             Todo List
           </RailSectionHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-4 [scrollbar-color:var(--line)_transparent]">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3.5 pb-4 [scrollbar-color:var(--line)_transparent]">
             {renderReminderList(visibleTodoTasks, "No todos yet.", true)}
           </div>
         </div>
@@ -4863,17 +4875,16 @@ function ReminderCard({
   const dueLabel = formatTodoDue(task);
   const dueUrgency = todoDueUrgencyTokens(task);
   const canDrag = task.status !== "completed";
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useDraggable({
-      id: `task:${task.id}`,
-      data: { type: "task", taskId: task.id } satisfies DragPayload,
-      disabled: !canDrag,
-    });
-  const transformStyle = transform
-    ? {
-        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-      }
-    : undefined;
+  // NOTE: we intentionally do NOT read `transform` from useDraggable. A
+  // `<DragOverlay>` renders the moving clone that follows the cursor, so
+  // translating the source too is redundant — and worse, translating the
+  // source downward extends the rail's scroll height and pops a vertical
+  // scrollbar. Keep the source in place (dimmed via isDragging) instead.
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `task:${task.id}`,
+    data: { type: "task", taskId: task.id } satisfies DragPayload,
+    disabled: !canDrag,
+  });
 
   const saveReminder = () => {
     updateReminder(task.id, {
@@ -4954,19 +4965,18 @@ function ReminderCard({
         "group relative rounded-[10px] border border-transparent transition-all duration-150 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)]",
         dueUrgency?.card,
         canDrag && "touch-none select-none",
-        isDragging &&
-          "z-50 border-[color:var(--line)] bg-[color:var(--hover)] shadow-[0_10px_24px_-14px_rgba(20,18,10,0.35)]",
+        // Source stays put while dragging (the DragOverlay clone moves);
+        // dim it to read as "this is the one being placed".
+        isDragging && "opacity-40",
       )}
     >
       <div
         ref={setNodeRef}
-        style={transformStyle}
         className={cn(
           "flex items-start gap-2.5 rounded-[10px] p-2.5",
           canDrag
             ? "cursor-grab select-none touch-none active:cursor-grabbing"
             : "cursor-default opacity-50",
-          isDragging && "opacity-95",
         )}
         {...(canDrag ? listeners : {})}
         {...attributes}
@@ -5271,7 +5281,7 @@ function RightRail({
         />
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-0 pb-4 [scrollbar-color:var(--line)_transparent]">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-0 pb-4 [scrollbar-color:var(--line)_transparent]">
         {activeRoutines.length ? (
           activeRoutines.map((template) => (
             <RoutineTemplateCard
@@ -5710,19 +5720,16 @@ function RoutineTemplateCard({
   const styles = routineColorTokens(template.color);
   const commuteRoutine = isCommuteTemplate(template);
   const archived = Boolean(template.archived);
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useDraggable({
-      id: `template:${template.id}`,
-      data: { type: "template", templateId: template.id } satisfies DragPayload,
-      // Archived routines are hidden from scheduling — can't drag onto the
-      // timeline; they only exist here so you can review or unarchive them.
-      disabled: archived,
-    });
-  const transformStyle = transform
-    ? {
-        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-      }
-    : undefined;
+  // No `transform`: the DragOverlay clone is the moving visual. Translating
+  // the source too would extend the rail's scroll height and pop a vertical
+  // scrollbar (same bug as the todo cards). Source stays put, dimmed.
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `template:${template.id}`,
+    data: { type: "template", templateId: template.id } satisfies DragPayload,
+    // Archived routines are hidden from scheduling — can't drag onto the
+    // timeline; they only exist here so you can review or unarchive them.
+    disabled: archived,
+  });
 
   if (isEditing) {
     return (
@@ -5760,14 +5767,13 @@ function RoutineTemplateCard({
   return (
     <div
       ref={setNodeRef}
-      style={transformStyle}
       className={cn(
         "group mx-3 mb-1.5 flex select-none items-center gap-[11px] rounded-[11px] border border-transparent p-2.5 transition-all duration-150 hover:border-[color:var(--line-soft)] hover:bg-[color:var(--hover)]",
         archived
           ? "cursor-default opacity-55 hover:opacity-80"
           : "cursor-grab touch-none active:cursor-grabbing",
-        isDragging &&
-          "z-50 border-[color:var(--line)] bg-[color:var(--hover)] opacity-95 shadow-[0_10px_24px_-14px_rgba(20,18,10,0.35)]",
+        // Source stays put while dragging (DragOverlay clone moves); dim it.
+        isDragging && "opacity-40",
       )}
       {...(archived ? {} : listeners)}
       {...(archived ? {} : attributes)}

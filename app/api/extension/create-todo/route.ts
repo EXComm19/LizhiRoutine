@@ -6,7 +6,12 @@ import type {
   TodoItem,
   TodoList,
 } from "@/lib/schema";
+import type { ParsedTodoCandidate } from "@/lib/ai-todo-parser";
 import { getUserFromExtensionRequest } from "@/lib/server/extension-auth";
+import {
+  MAX_PARSE_INPUT_CHARS,
+  parseTodosWithKimi,
+} from "@/lib/server/todo-parse-engine";
 import { createServiceClient } from "@/utils/supabase/service";
 
 export const runtime = "nodejs";
@@ -184,12 +189,7 @@ export async function POST(request: NextRequest) {
   }
 
   const lists = stateRow.todo_lists ?? [];
-  const requestedListId =
-    typeof body.listId === "string" ? body.listId : undefined;
-  const list =
-    (requestedListId && lists.find((l) => l.id === requestedListId)) ||
-    lists[0];
-  if (!list) {
+  if (!lists.length) {
     return NextResponse.json(
       {
         error:
@@ -197,6 +197,50 @@ export async function POST(request: NextRequest) {
       },
       { status: 404 },
     );
+  }
+
+  // AI-parse the captured page (raw title + body text) for a deadline,
+  // tags, list, and category. Best-effort: if Kimi is unavailable or
+  // returns nothing we still create the todo with the cleaned title +
+  // default list (the old behaviour). We feed the RAW page title (not the
+  // cleaned one) since its breadcrumb carries useful course-code signal.
+  let parsed: ParsedTodoCandidate | null = null;
+  try {
+    const parseInput = [sourceTitle, text]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, MAX_PARSE_INPUT_CHARS);
+    const result = await parseTodosWithKimi({
+      text: parseInput,
+      selectedDate: new Date().toISOString().slice(0, 10),
+      existingLists: lists.map((l) => ({ id: l.id, name: l.name })),
+    });
+    parsed = result.todos[0] ?? null;
+  } catch (error) {
+    console.warn(
+      "[extension/create-todo] parse failed; creating with defaults:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  // List precedence: explicit body.listId > parsed listName (existing
+  // match only) > first list (Inbox).
+  const requestedListId =
+    typeof body.listId === "string" ? body.listId : undefined;
+  const explicitList = requestedListId
+    ? lists.find((l) => l.id === requestedListId)
+    : undefined;
+  const parsedListName = parsed?.listName?.trim().toLowerCase();
+  const parsedListMatch = parsedListName
+    ? lists.find((l) => l.name.toLowerCase() === parsedListName)
+    : undefined;
+  const list = explicitList ?? parsedListMatch ?? lists[0];
+
+  // Prefer the AI title when we parsed one and the user didn't type an
+  // explicit title — it lifts course codes out of LMS body text
+  // ("BPS3061 Team Routine") beyond what the breadcrumb cleanup does.
+  if (!explicitTitle && parsed?.title) {
+    title = parsed.title.replace(/[\r\n\t]/g, " ").slice(0, MAX_TITLE_CHARS);
   }
 
   const host = safeHostname(sourceUrl ?? undefined);
@@ -216,8 +260,12 @@ export async function POST(request: NextRequest) {
 
   const newTodo = createTodo({
     title,
-    category: clampCategory(body.category),
+    // Explicit body.category wins; else the parsed tier; else T1.
+    category: body.category ? clampCategory(body.category) : (parsed?.category ?? "T1"),
     list_id: list.id,
+    due_date: parsed?.dueDate ?? null,
+    due_time: parsed?.dueTime ?? null,
+    tags: parsed?.tags ?? [],
   });
   newTodo.context_docs = [newDoc];
   if (typeof body.userInsight === "string" && body.userInsight.trim()) {
