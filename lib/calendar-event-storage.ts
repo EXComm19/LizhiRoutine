@@ -43,6 +43,13 @@ export function importCalendarEventsToStorage(
       locked: true,
       source_id: event.sourceId,
       import_batch: importBatch,
+      // Carry the .ics LOCATION / DESCRIPTION so the timeline block can
+      // surface them on hover. Cap so a verbose agenda doesn't bloat the
+      // synced day blob / overflow the tooltip.
+      ...(event.location ? { location: event.location.slice(0, 200) } : {}),
+      ...(event.description
+        ? { description: event.description.slice(0, 600) }
+        : {}),
     });
     grouped.set(dateKey, [...(grouped.get(dateKey) ?? []), task]);
   }

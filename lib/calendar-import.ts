@@ -3,11 +3,17 @@ export type ImportedCalendarEvent = {
   title: string;
   startTime: string;
   durationMinutes: number;
+  /** ICS LOCATION, if present. */
+  location?: string;
+  /** ICS DESCRIPTION, if present. */
+  description?: string;
 };
 
 type RawCalendarEvent = {
   uid?: string;
   summary?: string;
+  location?: string;
+  description?: string;
   dtstart?: string;
   dtend?: string;
   duration?: string;
@@ -58,6 +64,8 @@ function parseRawEvents(text: string) {
 
     if (name === "UID") current.uid = value;
     if (name === "SUMMARY") current.summary = unescapeIcsText(value);
+    if (name === "LOCATION") current.location = unescapeIcsText(value);
+    if (name === "DESCRIPTION") current.description = unescapeIcsText(value);
     if (name === "DTSTART") current.dtstart = value;
     if (name === "DTEND") current.dtend = value;
     if (name === "DURATION") current.duration = value;
@@ -108,6 +116,8 @@ function expandEvent(
 
   const durationMinutes = getDurationMinutes(event, firstStart);
   const title = event.summary?.trim() || "Calendar event";
+  const location = event.location?.trim() || undefined;
+  const description = event.description?.trim() || undefined;
   const uid = event.uid || `${title}-${event.dtstart}`;
   const exdates = new Set(
     event.exdates
@@ -121,14 +131,14 @@ function expandEvent(
     }
 
     return [
-      toImportedEvent(uid, title, firstStart, durationMinutes, firstStart),
+      toImportedEvent(uid, title, firstStart, durationMinutes, firstStart, location, description),
     ];
   }
 
   const rule = parseRule(event.rrule);
   if (!rule.freq || !["DAILY", "WEEKLY"].includes(rule.freq)) {
     return eventIntersectsRange(firstStart, durationMinutes, rangeStart, rangeEnd)
-      ? [toImportedEvent(uid, title, firstStart, durationMinutes, firstStart)]
+      ? [toImportedEvent(uid, title, firstStart, durationMinutes, firstStart, location, description)]
       : [];
   }
 
@@ -146,7 +156,17 @@ function expandEvent(
         !exdates.has(cursor.toISOString()) &&
         eventIntersectsRange(cursor, durationMinutes, rangeStart, rangeEnd)
       ) {
-        results.push(toImportedEvent(uid, title, cursor, durationMinutes, cursor));
+        results.push(
+          toImportedEvent(
+            uid,
+            title,
+            cursor,
+            durationMinutes,
+            cursor,
+            location,
+            description,
+          ),
+        );
       }
       emitted += 1;
       cursor.setDate(cursor.getDate() + interval);
@@ -183,7 +203,15 @@ function expandEvent(
         eventIntersectsRange(occurrence, durationMinutes, rangeStart, rangeEnd)
       ) {
         results.push(
-          toImportedEvent(uid, title, occurrence, durationMinutes, occurrence),
+          toImportedEvent(
+            uid,
+            title,
+            occurrence,
+            durationMinutes,
+            occurrence,
+            location,
+            description,
+          ),
         );
       }
     }
@@ -301,13 +329,17 @@ function toImportedEvent(
   start: Date,
   durationMinutes: number,
   occurrence: Date,
-) {
+  location?: string,
+  description?: string,
+): ImportedCalendarEvent {
   const occurrenceStamp = occurrence.toISOString();
   return {
     sourceId: `${uid}-${occurrenceStamp}`,
     title,
     startTime: start.toISOString(),
     durationMinutes,
+    ...(location ? { location } : {}),
+    ...(description ? { description } : {}),
   };
 }
 

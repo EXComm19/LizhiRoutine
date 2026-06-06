@@ -73,6 +73,14 @@ export type Task = {
    * that predate this field — those group under "Earlier import").
    */
   import_batch?: { id: string; label: string; importedAt: string };
+  /**
+   * Optional extras carried by ICS-imported calendar blocks — the
+   * LOCATION and DESCRIPTION fields from the .ics. Surfaced on hover so
+   * the detail the calendar app shows isn't lost. Unset on everything
+   * else; description is length-capped at import time.
+   */
+  location?: string;
+  description?: string;
   created_at: string;
   updated_at: string;
 };

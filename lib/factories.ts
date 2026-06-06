@@ -78,6 +78,8 @@ export type CreateTaskInput = {
   commute_config?: CommuteConfig | null;
   commute_estimate?: CommuteEstimate | null;
   import_batch?: { id: string; label: string; importedAt: string };
+  location?: string;
+  description?: string;
   id?: string;
 };
 
@@ -97,6 +99,8 @@ export function createTask(input: CreateTaskInput): Task {
     commute_config: input.commute_config ?? null,
     commute_estimate: input.commute_estimate ?? null,
     ...(input.import_batch ? { import_batch: input.import_batch } : {}),
+    ...(input.location ? { location: input.location } : {}),
+    ...(input.description ? { description: input.description } : {}),
     created_at: now,
     updated_at: now,
   };

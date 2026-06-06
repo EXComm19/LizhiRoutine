@@ -526,10 +526,10 @@ export function RoutinePlanner() {
     saveTimelineZoom(clamped);
   }, []);
 
-  // ── Day-view zoom shortcuts ──
-  // Alt + +/= / Alt + - / Alt + 0 for keyboard control; Alt + scroll
-  // wheel for mouse zoom. Alt (rather than Ctrl/Cmd) avoids hijacking
-  // the browser's own page-zoom shortcut.
+  // ── Timeline zoom shortcuts (day + week) ──
+  // Alt/Option + +/= / − / 0 for keyboard control; Alt/Option + scroll
+  // wheel for mouse zoom. Alt/Option (rather than Ctrl/Cmd) avoids
+  // hijacking the browser's own page-zoom shortcut.
   //
   // Skips:
   //  - other views (zoom only applies to the day timeline)
@@ -537,7 +537,8 @@ export function RoutinePlanner() {
   //    keeps working for OS / IME / accessibility)
   //  - keystrokes while a text input is focused
   useEffect(() => {
-    if (calendarView !== "day") return;
+    // Zoom applies to both timeline views (day + week); month/stats opt out.
+    if (calendarView !== "day" && calendarView !== "week") return;
 
     const isEditableTarget = () => {
       const el = document.activeElement as HTMLElement | null;
@@ -551,17 +552,23 @@ export function RoutinePlanner() {
       if (!event.altKey) return;
       if (event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (isEditableTarget()) return;
+      // Match on event.code (physical key), not event.key: on macOS,
+      // holding Option composes special chars (Option+= → "≠", Option+- →
+      // "–", Option+0 → "º"), so event.key never equals "="/"-"/"0".
+      // event.code stays "Equal"/"Minus"/"Digit0" regardless of OS,
+      // modifier, or layout — so Option (Mac) and Alt (Windows) both work.
       let next: number | null = null;
-      switch (event.key) {
-        case "+":
-        case "=":
+      switch (event.code) {
+        case "Equal":
+        case "NumpadAdd":
           next = timelineZoom + TIMELINE_ZOOM_STEP;
           break;
-        case "-":
-        case "_":
+        case "Minus":
+        case "NumpadSubtract":
           next = timelineZoom - TIMELINE_ZOOM_STEP;
           break;
-        case "0":
+        case "Digit0":
+        case "Numpad0":
           next = TIMELINE_ZOOM_DEFAULT;
           break;
         default:
@@ -1580,7 +1587,8 @@ export function RoutinePlanner() {
       // Drop target math: when the day view is zoomed, each pixel
       // covers fewer minutes, so divide by the active scale. Week view
       // is unaffected (zoom doesn't apply there).
-      const dropZoom = calendarView === "day" ? timelineZoom : 1;
+      const dropZoom =
+        calendarView === "day" || calendarView === "week" ? timelineZoom : 1;
       const rawMinutes = pixelsToMinutes(yOffset) / dropZoom;
       const snapped = snapMinutes(rawMinutes);
       const startMinutes = Math.max(
@@ -1745,7 +1753,8 @@ export function RoutinePlanner() {
         // Drag-anchor: where on the block the cursor grabbed it. Has to
         // use the same scale as the rendered block, otherwise the drop
         // lands offset on a zoomed day timeline.
-        const dragZoom = calendarView === "day" ? timelineZoom : 1;
+        const dragZoom =
+          calendarView === "day" || calendarView === "week" ? timelineZoom : 1;
         const taskTop = minutesToPixels(task.topMinutes) * dragZoom;
         const taskHeight = Math.max(
           1,
@@ -1785,7 +1794,8 @@ export function RoutinePlanner() {
         // Resize math: how many minutes the cursor has moved. Same
         // pixel→minute conversion the rendered block uses, so day-view
         // zoom must divide here for the snap math to feel right.
-        const resizeZoom = calendarView === "day" ? timelineZoom : 1;
+        const resizeZoom =
+          calendarView === "day" || calendarView === "week" ? timelineZoom : 1;
         const delta = pixelsToMinutes(clientY - pointerStartY) / resizeZoom;
 
         if (edge === "bottom") {
@@ -1961,19 +1971,21 @@ export function RoutinePlanner() {
               </TimelineZoomContext.Provider>
             )}
             {calendarView === "week" && (
-              <WeekView
-                days={weekDays}
-                periods={periods}
-                selectedDate={selectedDate}
-                sunTimes={sunTimes}
-                now={now}
-                isOver={isOver}
-                setTimelineNode={setTimelineNode}
-                setSelectedDate={setSelectedDate}
-                updateTask={updateTask}
-                deleteTask={deleteTask}
-                beginResize={beginResize}
-              />
+              <TimelineZoomContext.Provider value={timelineZoom}>
+                <WeekView
+                  days={weekDays}
+                  periods={periods}
+                  selectedDate={selectedDate}
+                  sunTimes={sunTimes}
+                  now={now}
+                  isOver={isOver}
+                  setTimelineNode={setTimelineNode}
+                  setSelectedDate={setSelectedDate}
+                  updateTask={updateTask}
+                  deleteTask={deleteTask}
+                  beginResize={beginResize}
+                />
+              </TimelineZoomContext.Provider>
             )}
             {calendarView === "month" && (
               <MonthView
@@ -2171,7 +2183,7 @@ type TopBarProps = {
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
-  /** Vertical zoom for the day timeline. Controls are only rendered when the day view is active. */
+  /** Vertical zoom for the timeline. Controls render in the day + week views. */
   timelineZoom: number;
   setTimelineZoom: (value: number) => void;
   onOpenReminderModal: () => void;
@@ -2281,8 +2293,9 @@ function TopBar({
       <ViewSwitcher value={calendarView} onChange={setCalendarView} />
 
       {/* Zoom control is desktop-only — at phone widths there's no room
-          and pinch-to-zoom isn't wired here either. */}
-      {calendarView === "day" && (
+          and pinch-to-zoom isn't wired here either. Shown for both timeline
+          views (day + week). */}
+      {(calendarView === "day" || calendarView === "week") && (
         <div className="hidden md:block">
           <TimelineZoomControl
             value={timelineZoom}
@@ -2933,18 +2946,19 @@ function StatsDateField({
   return (
     <label className="block text-[11px] font-medium uppercase tracking-wide text-[color:var(--ink-3)]">
       {label}
-      <span className="relative mt-1 flex h-8 w-[132px] items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2 text-left text-xs font-medium leading-none tabular-nums text-[color:var(--ink)] transition-colors focus-within:border-[color:var(--line-strong)] focus-within:ring-2 focus-within:ring-[color:var(--ring)]">
-        <span className="flex h-full items-center leading-none" aria-hidden="true">
-          {value.replace(/-/g, "/")}
-        </span>
-        <input
-          type="date"
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          aria-label={label}
-        />
-      </span>
+      {/* A real, visible native date input — the browser renders the
+          editable Y/M/D segments (with cursor + selection highlight) and
+          the calendar-picker icon. color-scheme makes those native bits
+          theme-correct in dark mode. (The old version overlaid an
+          opacity-0 input on a fake text span, so there was no visible
+          cursor/selection and the picker icon was invisible.) */}
+      <input
+        type="date"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label={label}
+        className="mt-1 flex h-8 w-[150px] cursor-pointer items-center rounded-[var(--r-sm)] border border-[color:var(--line)] bg-[color:var(--card)] px-2 text-xs font-medium tabular-nums text-[color:var(--ink)] outline-none transition-colors [color-scheme:light] focus:border-[color:var(--line-strong)] focus:ring-2 focus:ring-[color:var(--ring)] dark:[color-scheme:dark]"
+      />
     </label>
   );
 }
@@ -6186,6 +6200,11 @@ function WeekView({
   deleteTask,
   beginResize,
 }: WeekViewProps) {
+  // Same vertical zoom as the day timeline (supplied via context by the
+  // wrapping provider). The inner primitives (TimeGrid, PlacedTask,
+  // periods, deadlines) already read this hook; we just have to scale the
+  // column container so blocks don't overflow / clip.
+  const zoom = useTimelineZoom();
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--card)]">
       <div className="min-h-0 flex-1 overflow-y-scroll">
@@ -6255,7 +6274,7 @@ function WeekView({
             "relative min-w-[900px] transition-colors",
             isOver && "bg-[color:var(--sunken)]",
           )}
-          style={{ height: TIMELINE_HEIGHT }}
+          style={{ height: TIMELINE_HEIGHT * zoom }}
         >
           <TimeGrid gutterWidth={60} labelClassName="px-2 text-[11px]" sunTimes={sunTimes} />
           <div className="absolute inset-0 grid grid-cols-[60px_repeat(7,minmax(110px,1fr))]">
@@ -6821,6 +6840,10 @@ function PlacedTask({
   const taskHoverTitle = [
     `${task.title} (${startLabel} - ${endLabel})`,
     carryoverHint,
+    // ICS-imported calendar blocks carry the .ics LOCATION / DESCRIPTION;
+    // surface them on hover so that detail isn't lost on the timeline.
+    task.location ? `📍 ${task.location}` : null,
+    task.description ? task.description : null,
     task.commute_estimate
       ? `${compactRouteLabel(
           task.commute_estimate.origin,

@@ -424,6 +424,12 @@ function migrateTask(task: unknown): Task | null {
     ...(isImportBatch(t.import_batch)
       ? { import_batch: t.import_batch }
       : {}),
+    ...(typeof t.location === "string" && t.location
+      ? { location: t.location }
+      : {}),
+    ...(typeof t.description === "string" && t.description
+      ? { description: t.description }
+      : {}),
     created_at: typeof t.created_at === "string" ? t.created_at : now,
     updated_at: typeof t.updated_at === "string" ? t.updated_at : now,
   };

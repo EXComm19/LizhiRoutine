@@ -1355,6 +1355,8 @@ export function monthTaskHoverTitle(task: VisibleTask) {
     `Duration: ${formatDuration(task.duration_minutes)}`,
   ];
   if (task.displayListName) lines.push(`List: ${task.displayListName}`);
+  if (task.location) lines.push(`📍 ${task.location}`);
+  if (task.description) lines.push(task.description);
   if (task.status === "completed") lines.push("Status: completed");
   if (task.continuesBefore || task.continuesAfter) {
     lines.push("Continues across day boundary");
